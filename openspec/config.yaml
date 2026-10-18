@@ -1,0 +1,58 @@
+schema: spec-driven
+
+context: |
+  voice-enforcer: one Rust binary that holds Claude's written output to a voice profile at WRITE time,
+  so the voice survives context pressure (a big markdown profile falls out of context, a hook doesn't).
+  Claude Code fires it on every Write/Edit/MultiEdit; it extracts the prose (markdown body, tree-sitter
+  comment nodes in code), runs deterministic rules first, then hands the judgment calls to Haiku judges
+  via `claude -p`. Every finding blocks or warns per its rule's severity. It governs Claude's writes ONLY:
+  nothing hooks prose a human writes by hand (no git hooks, no editor integration), and `check` is a
+  manual / CI verb, not a gate on people.
+
+  The binary is voice-AGNOSTIC and public (MIT OR Apache-2.0). Every rule, judge rubric and dispute
+  sample lives in a ruleset directory OUTSIDE this repo, loaded from a configured path; the repo ships
+  only a neutral example ruleset. A real voice profile never lands here - not as an excerpt, not as a
+  test fixture, not as a "sanitized" example. Test and scenario prose is synthetic.
+
+  README.md is the map and docs/design.md owns the architecture (both land with the first change). Read
+  the owning doc BEFORE proposing a change to that subsystem, and treat it as source material for specs,
+  not text to copy (duplicates drift).
+
+  Specs grow one change at a time: openspec/specs/ started EMPTY on 2026-10-17 and never gets a bulk
+  backfill. A change that alters behavior ADDs or MODIFIEs the requirements it touches; a pure refactor,
+  tooling or docs change sets skip_specs: true in its .openspec.yaml.
+
+  A change is named <id>-<slug>, where <id> is the next two-letter id, spreadsheet-style, after the
+  highest one under openspec/changes/ (archive/ included, ignoring the YYYY-MM-DD- prefix an archived
+  folder gets). The first is aa and az rolls to ba. Gaps are never backfilled, because a backfilled id
+  reads as older than it is. Tasks are numbered <ID>.<N> (AA.1, AA.2 ...) and <ID>.0 is the phase-exit
+  criterion.
+
+  Unphased ideas and tech debt live in openspec/backlog.md: promoting one means proposing a change and
+  deleting its backlog line.
+
+rules:
+  proposal:
+    - Under Impact, name the doc that owns the subsystem (docs/design.md or README.md), or say that none does
+    - State the reach (CI on every push; users pick it up on their next `cargo install`) and any one-way door (a ruleset format change breaks every private ruleset until its owner migrates it)
+  specs:
+    - Requirements describe observable behavior (the hook decision and JSON Claude Code receives, CLI verbs and exit codes, files read and written), never internal type or function names
+    - Example prose in scenarios is synthetic, never quoted from a real voice profile
+  tasks:
+    - Number tasks <ID>.<N> under one "## <ID>. <title>" group, where <ID> is the change name's id prefix in uppercase
+    - <ID>.0 is the phase exit and says so - every box ticked, every ci.yml job green on the landing commit (the coverage gate included), docs/design.md updated
+    - Unit tests ship in the same task as the code they cover, never in a trailing "add tests" task
+    - End with a docs task (docs/design.md, plus README.md when the user-facing surface moved)
+
+operations:
+  apply:
+    guidance:
+      - Tick each box the moment its work is done, not in batches - chotchki watches tasks.md live
+      - When a box can't be finished, split it - tick what shipped and add a new unchecked box for what's left; partial or expanded work never goes undocumented
+      - Run full suites unpiped into a file and read the file (`cargo nextest run | tail` masks cargo's exit code and truncates the log)
+      - Keep cargo fmt and cargo clippy --all-targets -D warnings at zero
+      - The coverage gate is 99% lines (cargo-llvm-cov) - it exists to lock in requirements, so reach it by driving behavior through real seams (a fake `claude` on PATH, temp git repos, real hook JSON on stdin), not by mocking every call
+  archive:
+    guidance:
+      - Archive only when the <ID>.0 exit criterion holds; open boxes get split or descoped to openspec/backlog.md first
+      - Sync any delta specs into openspec/specs/ before moving the folder
