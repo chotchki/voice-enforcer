@@ -1,0 +1,11 @@
+# Tasks
+
+## AC. Disputes: misfires leave evidence the ruleset owner can use
+
+- [ ] AC.0 Phase exit: every box ticked, every ci.yml job green on the landing commit (the 99% coverage gate included), docs/design.md and README.md updated. The combined soak with aa's AA.19 follows this phase
+- [ ] AC.1 Shared helpers: move `utc_stamp` out of `setup` into a `clock` module beside a new RFC 3339 formatter, and split the shell quoting out of `install`'s command builder into a shared helper. Their existing tests move with them, plus RFC 3339 cases (epoch, a leap day, before the epoch)
+- [ ] AC.2 Finding ids and the hint: the 8-hex id from SHA-256 over session, absolute path, rule or judge id and matched text; `(id …)` on every listed finding; the one-line dispute hint (shell-quoted absolute binary path, says the result is unchanged) closing any listing with findings. Snapshot updates, plus tests for an id staying put when a retry moves the text to another line and for no hint on a notes-only listing
+- [ ] AC.3 Samples: save one per listed finding under `$XDG_STATE_HOME/voice-enforcer/findings/<id>.json` (temp-then-rename) with the span around the finding's line and its code context capped at 4,000 characters, `kind` from the ruleset's judge ids and the model, effort and rubric hash for judges; prune samples untouched for 7 days alongside the guard. Tests cover a rule sample, a judge sample, the context cap, an unwritable state dir leaving the decision unchanged and pruning
+- [ ] AC.4 `voice-enforcer dispute <id> --reason "<why>" [--ruleset <dir>]`: look up the sample, write `disputes/<rule>/<UTC stamp>-<id>.toml` with `version = 1`, the sample, the reason and `disputed_at`, print the path. Exit 2 for a blank reason or an unknown or expired id; a second dispute of the same id writes nothing and prints the existing path. Tests cover every scenario in the dispute requirements
+- [ ] AC.5 End to end through the real binary: a hook deny, the id parsed out of the reason, `dispute` writing the file under the ruleset dir, then the same write denied again with the same id (record-only)
+- [ ] AC.6 Docs: docs/design.md gets the disputes section (ids, the hint, samples vs disputes, the file format, record-only) from this change's design.md, and README.md mentions `dispute`; the dogfood job still passes
