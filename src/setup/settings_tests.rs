@@ -372,16 +372,11 @@ fn quoted_command_for_awkward_paths() {
 }
 
 #[test]
-fn utc_stamps() {
-    let at = |s: u64| utc_stamp(SystemTime::UNIX_EPOCH + Duration::from_secs(s));
-    assert_eq!(at(0), "19700101000000");
-    assert_eq!(at(951_868_800), "20000301000000");
-    assert_eq!(at(1_709_210_096), "20240229123456");
-    assert_eq!(at(NOW), "20261017193005");
-    assert_eq!(
-        utc_stamp(SystemTime::UNIX_EPOCH - Duration::from_secs(5)),
-        "19700101000000"
-    );
+fn shell_quoting() {
+    assert_eq!(shell_quote("/usr/bin/plain"), "/usr/bin/plain");
+    assert_eq!(shell_quote("a b"), "'a b'");
+    assert_eq!(shell_quote("$HOME/x"), "'$HOME/x'");
+    assert_eq!(shell_quote("it's"), r"'it'\''s'");
 }
 
 #[test]

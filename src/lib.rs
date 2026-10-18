@@ -1,6 +1,8 @@
 //! voice-enforcer: holds Claude Code's written output to a voice ruleset at write time.
 
 mod check;
+mod clock;
+mod disputes;
 mod env;
 mod extract;
 mod hook;
@@ -70,6 +72,17 @@ enum Command {
         #[arg(long)]
         settings: Option<PathBuf>,
     },
+    /// Record that a finding from the hook is wrong, for the ruleset owner. Changes nothing else.
+    Dispute {
+        /// The finding's id, as shown in the hook's output.
+        id: String,
+        /// Why the finding is wrong.
+        #[arg(long)]
+        reason: String,
+        /// Ruleset directory, overriding `VOICE_ENFORCER_RULESET` and the config dir.
+        #[arg(long)]
+        ruleset: Option<PathBuf>,
+    },
     /// Load the ruleset and report whether it's valid.
     Validate {
         /// Ruleset directory, overriding `VOICE_ENFORCER_RULESET` and the config dir.
@@ -127,6 +140,11 @@ where
             stderr,
             env,
         ),
+        Command::Dispute {
+            id,
+            reason,
+            ruleset,
+        } => disputes::dispute(&id, &reason, ruleset.as_deref(), stdout, stderr, env),
         Command::Init { ruleset, force } => {
             setup::init(ruleset.as_deref(), force, stdout, stderr, env)
         }

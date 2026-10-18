@@ -1,6 +1,7 @@
 ---
 source: src/hook/tests.rs
-expression: out.context()
+expression: redact(out.context())
 ---
 voice-enforcer warnings for README.md (the write went through):
-- [warn] no-very at README.md:1: "very" - Intensifier
+- [warn] no-very at README.md:1 (id ########): "very" - Intensifier
+Think a finding is wrong? Run `/bin/voice-enforcer dispute <id> --reason "why"`. It records the finding for the ruleset owner; it doesn't change this result.

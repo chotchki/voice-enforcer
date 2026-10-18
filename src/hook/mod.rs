@@ -12,6 +12,7 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 use similar::{DiffTag, TextDiff};
 
+use crate::disputes::{self, Sample};
 use crate::env::Env;
 use crate::rules::Finding;
 use crate::types::Severity;
@@ -132,9 +133,25 @@ fn decide(input: &str, env: &Env) -> Result<Option<Response>, String> {
 
     let state = env.state_dir();
     guard::prune(&state, env.now);
+    disputes::prune(&state, env.now);
     let session = payload.session_id.as_deref().unwrap_or("unknown");
     let guard = Guard::new(&state, session, &path, ruleset.max_consecutive_blocks);
     let shown = display_path(&path, &cwd);
+    let ids: Vec<String> = findings
+        .iter()
+        .map(|f| finding_id(session, &path, f))
+        .collect();
+    let samples: Vec<Sample> = findings
+        .iter()
+        .zip(&ids)
+        .map(|(f, id)| Sample::new(id, f, &path, &evaluated.spans, &ruleset))
+        .collect();
+    disputes::save(&state, &samples);
+    let hint = format!(
+        "Think a finding is wrong? Run `{} dispute <id> --reason \"why\"`. It records the finding for the ruleset owner; it doesn't change this result.",
+        crate::setup::exe_for_shell(env)
+    );
+    let list = |header: &str| listing(header, &findings, &ids, &notes, &shown, &hint);
     let blocks = findings
         .iter()
         .filter(|f| f.severity == Severity::Block)
@@ -147,28 +164,16 @@ fn decide(input: &str, env: &Env) -> Result<Option<Response>, String> {
             return Ok(None);
         }
         let header = format!("voice-enforcer warnings for {shown} (the write went through):");
-        return Ok(Some(Response::Context(listing(
-            &header, &findings, &notes, &shown,
-        ))));
+        return Ok(Some(Response::Context(list(&header))));
     }
     Ok(Some(match guard.on_block() {
-        Verdict::Deny => Response::Deny(listing(
-            &format!(
-                "voice-enforcer blocked this write to {shown}: {blocks} blocking and {warns} warning finding(s). Fix the blocking ones and retry."
-            ),
-            &findings,
-            &notes,
-            &shown,
-        )),
-        Verdict::Tripped => Response::Context(listing(
-            &format!(
-                "voice-enforcer loop guard tripped: {shown} was blocked {} times in a row this session, so its blocking findings are warnings this time. Fix them anyway, or tell the user a rule looks wrong.",
-                ruleset.max_consecutive_blocks
-            ),
-            &findings,
-            &notes,
-            &shown,
-        )),
+        Verdict::Deny => Response::Deny(list(&format!(
+            "voice-enforcer blocked this write to {shown}: {blocks} blocking and {warns} warning finding(s). Fix the blocking ones and retry."
+        ))),
+        Verdict::Tripped => Response::Context(list(&format!(
+            "voice-enforcer loop guard tripped: {shown} was blocked {} times in a row this session, so its blocking findings are warnings this time. Fix them anyway, or tell the user a rule looks wrong.",
+            ruleset.max_consecutive_blocks
+        ))),
     }))
 }
 
@@ -195,15 +200,45 @@ fn display_path(path: &Path, cwd: &Path) -> String {
     path.strip_prefix(cwd).unwrap_or(path).display().to_string()
 }
 
-fn listing(header: &str, findings: &[Finding], notes: &[String], shown: &str) -> String {
+/// The dispute id for a finding: the line is left out on purpose, so text a retry moved keeps
+/// its id.
+pub(crate) fn finding_id(session: &str, path: &Path, finding: &Finding) -> String {
+    use sha2::{Digest, Sha256};
     use std::fmt::Write as _;
-    let mut sorted: Vec<&Finding> = findings.iter().collect();
-    sorted.sort_by_key(|f| (f.severity, f.line));
+    let mut hash = Sha256::new();
+    for part in [
+        session.as_bytes(),
+        path.as_os_str().as_encoded_bytes(),
+        finding.rule_id.as_bytes(),
+        finding.matched.as_bytes(),
+    ] {
+        hash.update(part);
+        hash.update([0]);
+    }
+    hash.finalize()[..4]
+        .iter()
+        .fold(String::with_capacity(8), |mut id, b| {
+            let _ = write!(id, "{b:02x}");
+            id
+        })
+}
+
+fn listing(
+    header: &str,
+    findings: &[Finding],
+    ids: &[String],
+    notes: &[String],
+    shown: &str,
+    hint: &str,
+) -> String {
+    use std::fmt::Write as _;
+    let mut sorted: Vec<(&Finding, &String)> = findings.iter().zip(ids).collect();
+    sorted.sort_by_key(|(f, _)| (f.severity, f.line));
     let mut out = header.to_owned();
-    for f in sorted {
+    for (f, id) in &sorted {
         let _ = write!(
             out,
-            "\n- [{}] {} at {shown}:{}: \"{}\" - {}",
+            "\n- [{}] {} at {shown}:{} (id {id}): \"{}\" - {}",
             f.severity, f.rule_id, f.line, f.matched, f.message
         );
         if let Some(s) = &f.suggestion {
@@ -212,6 +247,9 @@ fn listing(header: &str, findings: &[Finding], notes: &[String], shown: &str) ->
     }
     for note in notes {
         let _ = write!(out, "\n- note: {note}");
+    }
+    if !sorted.is_empty() {
+        let _ = write!(out, "\n{hint}");
     }
     out
 }

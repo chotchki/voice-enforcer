@@ -192,22 +192,31 @@ fn remove_ours(groups: &mut Vec<Value>) {
 }
 
 fn command(env: &Env) -> String {
+    format!("{} hook", exe_for_shell(env))
+}
+
+/// The running binary's canonical path, quoted for a shell command line.
+pub(crate) fn exe_for_shell(env: &Env) -> String {
     let exe = std::fs::canonicalize(&env.exe).unwrap_or_else(|_| env.exe.clone());
-    let exe = exe.display().to_string();
-    // Single quotes stop every shell expansion; an embedded quote becomes '\''.
-    if exe
+    shell_quote(&exe.display().to_string())
+}
+
+/// `word` as one shell word: unchanged when it's plain, single-quoted otherwise (single quotes
+/// stop every expansion; an embedded quote becomes '\'').
+pub(crate) fn shell_quote(word: &str) -> String {
+    if word
         .chars()
         .any(|c| c.is_whitespace() || "'\"$`\\!*?[]{}()<>|&;#~".contains(c))
     {
-        format!("'{}' hook", exe.replace('\'', "'\\''"))
+        format!("'{}'", word.replace('\'', "'\\''"))
     } else {
-        format!("{exe} hook")
+        word.to_owned()
     }
 }
 
 fn backup(path: &Path, text: &str, now: SystemTime) -> std::io::Result<PathBuf> {
     let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let stamp = utc_stamp(now);
+    let stamp = crate::clock::utc_stamp(now);
     let mut n = 0;
     loop {
         let suffix = if n == 0 {
@@ -243,30 +252,6 @@ fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
 }
 
 /// `YYYYMMDDHHMMSS` in UTC.
-fn utc_stamp(t: SystemTime) -> String {
-    let secs = t
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let days = i64::try_from(secs / 86_400).unwrap_or(0);
-    let rem = secs % 86_400;
-    // Howard Hinnant's days-to-civil.
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!(
-        "{year:04}{month:02}{day:02}{:02}{:02}{:02}",
-        rem / 3600,
-        rem % 3600 / 60,
-        rem % 60
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;

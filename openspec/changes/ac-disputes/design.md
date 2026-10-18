@@ -74,7 +74,7 @@ rubric_sha256 = "9b1c0f2a77e4d3c1"
 context = """..."""
 ```
 
-`version` exists for the same reason the ruleset has one: these files accumulate in private repos this repo can't see, so a later format change has to be detectable. Writing is temp-then-rename and refuses to overwrite: if any `*-<id>.toml` already exists in that rule's folder, the command prints its path and exits 0.
+`version` exists for the same reason the ruleset has one: these files accumulate in private repos this repo can't see, so a later format change has to be detectable. Writing uses create-new, so a record is never overwritten even if two disputes race; if any `*-<id>.toml` already exists in that rule's folder, the command prints its path and exits 0.
 
 ### Shared helpers move out of `setup`
 

@@ -1,0 +1,22 @@
+---
+source: src/disputes/tests.rs
+expression: "fs::read_to_string(&files[0]).unwrap()"
+---
+version = 1
+id = "3fa9c201"
+rule = "recap-closer"
+kind = "judge"
+severity = "warn"
+file = "/r/docs/design.md"
+line = 31
+matched = "so the failure mode is a missed check"
+message = "A recap."
+suggestion = "Cut it."
+reason = "a real contrast, not a recap"
+disputed_at = "2026-10-17T19:30:05Z"
+model = "haiku"
+effort = "medium"
+rubric_sha256 = "9b1c0f2a77e4d3c1"
+context = """
+Line one of the paragraph.
+so the failure mode is a missed check."""

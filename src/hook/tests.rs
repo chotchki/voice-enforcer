@@ -135,6 +135,22 @@ impl Out {
     }
 }
 
+/// Ids hash the temp dir's path, so snapshots see a placeholder.
+fn redact(text: &str) -> String {
+    regex::Regex::new(r"\(id [0-9a-f]{8}\)")
+        .unwrap()
+        .replace_all(text, "(id ########)")
+        .into_owned()
+}
+
+fn ids(text: &str) -> Vec<String> {
+    regex::Regex::new(r"\(id ([0-9a-f]{8})\)")
+        .unwrap()
+        .captures_iter(text)
+        .map(|c| c[1].to_owned())
+        .collect()
+}
+
 fn assert_never_grants(json: &Value) {
     let output = &json["hookSpecificOutput"];
     assert_eq!(output["hookEventName"], "PreToolUse");
@@ -158,7 +174,7 @@ fn blocking_write_is_denied_with_every_finding() {
     let out = fx.write("README.md", "# Title\n\nWe leverage a very fast cache.\n");
     assert_eq!(out.code, 0);
     assert_eq!(out.decision(), Some("deny"));
-    insta::assert_snapshot!("deny_reason", out.reason());
+    insta::assert_snapshot!("deny_reason", redact(out.reason()));
     for needle in [
         "no-leverage",
         "[block]",
@@ -177,11 +193,74 @@ fn blocking_write_is_denied_with_every_finding() {
 }
 
 #[test]
+fn every_finding_has_an_id_and_the_hint_closes_the_listing() {
+    let fx = Fixture::new(Some(RULES));
+    let out = fx.write("README.md", "We leverage a very fast cache.\n");
+    assert_eq!(ids(out.reason()).len(), 2);
+    let last = out.reason().lines().last().unwrap();
+    assert!(
+        last.starts_with(
+            "Think a finding is wrong? Run `/bin/voice-enforcer dispute <id> --reason"
+        ),
+        "{last}"
+    );
+    assert!(last.ends_with("it doesn't change this result."), "{last}");
+}
+
+#[test]
+fn ids_survive_a_retry_that_moves_the_text() {
+    let fx = Fixture::new(Some(RULES));
+    let first = fx.write("README.md", "We leverage it.\n");
+    let second = fx.write("README.md", "Intro.\n\nWe leverage it.\n");
+    assert!(
+        second.reason().contains("README.md:3"),
+        "{}",
+        second.reason()
+    );
+    assert_eq!(ids(first.reason()), ids(second.reason()));
+    let other_session = fx.run(&fx.payload(
+        "s2",
+        "Write",
+        &json!({"file_path": fx.repo.join("README.md"), "content": "We leverage it.\n"}),
+    ));
+    assert_ne!(ids(first.reason()), ids(other_session.reason()));
+}
+
+#[test]
+fn listed_findings_leave_samples_behind() {
+    let fx = Fixture::new(Some(RULES));
+    let out = fx.write("README.md", "We leverage a very fast cache.\n");
+    for id in ids(out.reason()) {
+        let sample = crate::disputes::load(&fx.env.state_dir(), &id).expect("a sample per finding");
+        assert_eq!(sample.id, id);
+        assert_eq!(sample.context, "We leverage a very fast cache.");
+        assert_eq!(sample.file, fx.repo.join("README.md").display().to_string());
+    }
+}
+
+#[test]
+fn unwritable_state_leaves_the_decision_alone() {
+    let fx = Fixture::new(Some(RULES));
+    std::fs::write(fx.env.state_dir().parent().unwrap(), "a file, not a dir").unwrap();
+    let out = fx.write("README.md", "We leverage it.\n");
+    assert_eq!(out.decision(), Some("deny"));
+}
+
+#[test]
+fn notes_only_listing_has_no_hint() {
+    let fx = Fixture::new(Some(
+        "version = 1\n[[rule]]\nid = \"bad\"\nkind = \"regex\"\nseverity = \"block\"\nmessage = \"m\"\npattern = \"(\"\n",
+    ));
+    let out = fx.write("README.md", "leverage\n");
+    assert!(!out.context().contains("dispute"), "{}", out.context());
+}
+
+#[test]
 fn warnings_ride_along_without_a_decision() {
     let fx = Fixture::new(Some(RULES));
     let out = fx.write("README.md", "A very fast cache.\n");
     assert_eq!(out.decision(), None);
-    insta::assert_snapshot!("warn_context", out.context());
+    insta::assert_snapshot!("warn_context", redact(out.context()));
 }
 
 #[test]
@@ -386,7 +465,7 @@ fn loop_guard_trips_after_three_denies() {
     }
     let fourth = fx.write("README.md", "leverage\n");
     assert_eq!(fourth.decision(), None);
-    insta::assert_snapshot!("tripped_context", fourth.context());
+    insta::assert_snapshot!("tripped_context", redact(fourth.context()));
 }
 
 #[test]
@@ -496,7 +575,7 @@ rubric = "RECAP_RUBRIC"
             "A very fast cache. In conclusion, it is fast.\n",
         );
         assert_eq!(out.decision(), None);
-        insta::assert_snapshot!("judge_warn_context", out.context());
+        insta::assert_snapshot!("judge_warn_context", redact(out.context()));
         assert_eq!(fake.calls(), 1);
     }
 
@@ -512,8 +591,9 @@ rubric = "RECAP_RUBRIC"
         let out = fx.write("README.md", "Fast cache. In conclusion, it is fast.\n");
         assert_eq!(out.decision(), Some("deny"));
         assert!(
-            out.reason()
-                .contains("[block] recap at README.md:1: \"In conclusion, it is fast.\""),
+            redact(out.reason()).contains(
+                "[block] recap at README.md:1 (id ########): \"In conclusion, it is fast.\""
+            ),
             "{}",
             out.reason()
         );

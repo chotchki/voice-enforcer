@@ -18,7 +18,7 @@ Those rules catch the MECHANICAL tells. The judgment calls (a recap closer, a co
 
 A finding either blocks the write (Claude gets the reason and rewrites before anything lands on disk) or rides along as a warning. Which one is your call, per rule and per judge.
 
-To be clear about the limits: judges are a model, so they can miss things and they can misfire. A quote a judge returns has to actually be in the text or it gets dropped, and a judge that times out or errors becomes a note, never a block, but a judge can still flag something you'd keep (the example ones ship as warnings for that reason; marking a judge wrong is next on the [backlog](openspec/backlog.md)). It also governs Claude's writes only, nothing hooks what you type by hand.
+To be clear about the limits: judges are a model, so they can miss things and they can misfire. A quote a judge returns has to actually be in the text or it gets dropped, and a judge that times out or errors becomes a note, never a block, but a judge can still flag something you'd keep (the example ones ship as warnings for that reason). When a rule or judge gets it wrong, Claude can run `voice-enforcer dispute <id> --reason "why"` with the id from the finding: it records the finding, the prose around it and the reason under `disputes/` in your ruleset folder, so you can tune the rule from real misfires. It changes nothing on its own, on purpose. The tool also governs Claude's writes only, nothing hooks what you type by hand.
 
 ## Install
 
@@ -39,7 +39,7 @@ Upgrading from a version without judges? Re-run `voice-enforcer install`, it rai
 
 ## Where to go next
 
-- [docs/design.md](docs/design.md) owns the details: the hook contract, how prose gets extracted, every rule kind, how judges get called and checked and the measured latency.
+- [docs/design.md](docs/design.md) owns the details: the hook contract, how prose gets extracted, every rule kind, how judges get called and checked, the dispute record and the measured latency.
 - [The example ruleset](examples/ruleset/ruleset.toml) has one of each rule kind and two judges, commented with why each exists.
 - [openspec/](openspec/) holds the plan; [openspec/backlog.md](openspec/backlog.md) is what's next.
 

@@ -1,6 +1,6 @@
 # voice-enforcer design
 
-This doc owns how voice-enforcer works: the hook contract, prose extraction, the deterministic rules, the Haiku judges and the ruleset format. The [README](../README.md) is the map and the CLI's `--help` owns flag details. Out of scope here (and in the code so far): judge disputes, `gh` interception and office formats, all tracked in the [backlog](../openspec/backlog.md).
+This doc owns how voice-enforcer works: the hook contract, prose extraction, the deterministic rules, the Haiku judges, disputes and the ruleset format. The [README](../README.md) is the map and the CLI's `--help` owns flag details. Out of scope here (and in the code so far): `gh` interception and office formats, both tracked in the [backlog](../openspec/backlog.md).
 
 ## The pipeline
 
@@ -33,7 +33,7 @@ flowchart LR
 - **Output.** Any blocking finding → `permissionDecision: "deny"` with every finding (blocks and warnings) in the reason. Warnings only → `additionalContext` and NO decision. Nothing → no output. The hook never emits `allow` or `ask`: `allow` skips the user's permission prompt, and a voice linter must never become a permission bypass.
 - **Fail open, loudly.** Internal errors and garbage payloads exit 1 (Claude Code treats that as a non-blocking error) and never 2, since a broken enforcer that blocks every write bricks the session and the fix usually needs a write. A ruleset that exists but won't load comes back as `additionalContext` on every write so it can't be ignored; no ruleset at all is a silent pass.
 
-Each finding names the rule id, severity, `path:line`, the matched text, the rule's message and its suggestion, enough for Claude to fix it without reading the ruleset.
+Each finding names the rule id, severity, `path:line`, a dispute id, the matched text, the rule's message and its suggestion, enough for Claude to fix it without reading the ruleset. A listing with findings ends with one line telling Claude how to dispute one ([Disputes](#disputes)).
 
 ### Loop guard
 
@@ -189,6 +189,49 @@ Flag a sentence whose only job is to restate what the text around it already sai
 ```
 
 Start judges at `warn`. Every judged write waits about one Haiku round trip no matter the severity, and a judge still being tuned shouldn't be able to block.
+
+## Disputes
+
+Rules and judges misfire, and without a record the evidence the ruleset owner needs is gone as soon as Claude rewrites around it. A dispute keeps it. Disputes are RECORD-ONLY: nothing a dispute writes is ever read back when rules or judges run, so the same text gets flagged again next time and the owner tunes the rule by hand from the samples.
+
+```mermaid
+flowchart LR
+  H[hook lists a finding] --> S["state: findings/&lt;id&gt;.json<br/>(kept 7 days)"]
+  C["Claude runs dispute &lt;id&gt; --reason"] --> L{sample exists?}
+  S -.-> L
+  L -->|no| E[exit 2: unknown or expired]
+  L -->|yes| D["ruleset dir: disputes/&lt;rule&gt;/&lt;UTC stamp&gt;-&lt;id&gt;.toml"]
+```
+
+- **Ids** are the first 8 hex of SHA-256 over the session, the absolute path, the rule or judge id and the matched text. The line is left out on purpose: a retry usually moves the offending text, and an id that changed every retry would be stale by the time Claude used it. Listings show it as `- [block] no-leverage at README.md:4 (id 3fa9c201): ...`.
+- **The hint** closes any listing with findings, once: ``Think a finding is wrong? Run `<binary> dispute <id> --reason "why"`. It records the finding for the ruleset owner; it doesn't change this result.`` The binary path is absolute and shell-quoted (same helper as `install`), so it works off `PATH`. Saying it doesn't change the result is what keeps Claude from disputing and then retrying the same text into the loop guard.
+- **Samples** are written for every listed finding under `$XDG_STATE_HOME/voice-enforcer/findings/` and pruned after 7 days untouched. Each holds the rule or judge id, `kind` (`rule` or `judge`), severity, file, line, matched text, message, suggestion and the raw text of the span around the finding plus its code context (both capped at 4,000 characters). Judge samples add the model, the effort and `rubric_sha256` (16 hex), so a dispute can be matched to the rubric version that produced it. Saving is best effort; it never changes a decision.
+- **Disputes** go to `disputes/<rule-or-judge-id>/<UTC stamp>-<id>.toml` next to the ruleset, which puts them under the same version control as the rules they're evidence about (the audit trail is a plain diff). A rule id that could climb out of `disputes/` is sanitized. The file is written create-new, so a second dispute of the same id (or a race) never overwrites a record; the command prints the existing path and exits 0. A blank reason or an unknown or expired id exits 2 and writes nothing.
+
+The record is TOML with a `version`, since these files pile up in private repos this one can't see:
+
+```toml
+version = 1
+id = "3fa9c201"
+rule = "recap-closer"
+kind = "judge"
+severity = "warn"
+file = "/r/docs/design.md"
+line = 31
+matched = "so the failure mode is a missed check"
+message = "A recap."
+suggestion = "Cut it."
+reason = "a real contrast, not a recap"
+disputed_at = "2026-10-17T19:30:05Z"
+model = "haiku"
+effort = "medium"
+rubric_sha256 = "9b1c0f2a77e4d3c1"
+context = """
+Line one of the paragraph.
+so the failure mode is a missed check."""
+```
+
+`check` output carries no ids: it's for people and CI, and a person can just fix the ruleset.
 
 ## The ruleset file
 
