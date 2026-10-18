@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use toml::Spanned;
 
-use super::{Cx, LoadError};
+use super::{Cx, Excludes, LoadError};
 use crate::types::{Register, Severity};
 
 const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
@@ -45,11 +45,24 @@ pub struct Judge {
     pub scope: Scope,
     pub registers: Vec<Register>,
     pub rubric: String,
+    pub excludes: Excludes,
+    /// Overrides for `[judges]`, this judge only.
+    pub model: Option<String>,
+    pub effort: Option<String>,
 }
 
 impl Judge {
     pub fn applies_to(&self, register: Register) -> bool {
         self.registers.contains(&register)
+    }
+
+    /// `base` with this judge's own model and effort in place.
+    pub fn settings(&self, base: &JudgeSettings) -> JudgeSettings {
+        JudgeSettings {
+            model: self.model.clone().unwrap_or_else(|| base.model.clone()),
+            effort: self.effort.clone().unwrap_or_else(|| base.effort.clone()),
+            ..base.clone()
+        }
     }
 }
 
@@ -71,6 +84,9 @@ pub(super) struct RawJudge {
     registers: Option<Spanned<Vec<Spanned<String>>>>,
     rubric: Option<Spanned<String>>,
     rubric_file: Option<Spanned<String>>,
+    exclude: Option<Spanned<Vec<Spanned<String>>>>,
+    model: Option<Spanned<String>>,
+    effort: Option<Spanned<String>>,
 }
 
 impl Cx<'_> {
@@ -91,17 +107,8 @@ impl Cx<'_> {
             Some(v) => Ok(v.into_inner()),
         };
         let effort = match raw.effort {
-            Some(e) if !EFFORTS.contains(&e.get_ref().as_str()) => {
-                return Err(self.fail(
-                    Some(e.span()),
-                    format!(
-                        "unknown `judges.effort` `{}`; expected one of {}",
-                        e.get_ref(),
-                        EFFORTS.join(", ")
-                    ),
-                ));
-            }
-            other => text(other, "effort", defaults.effort)?,
+            Some(e) => self.effort(e, "judges.effort", &str::to_owned)?,
+            None => defaults.effort,
         };
         let timeout = match raw.timeout_secs {
             None => defaults.timeout,
@@ -149,6 +156,17 @@ impl Cx<'_> {
             vec![Register::LongForm, Register::Comment],
             &at,
         )?;
+        let excludes = self.excludes(raw.exclude.as_ref(), &at)?;
+        let model = match raw.model {
+            Some(m) if m.get_ref().trim().is_empty() => {
+                return Err(self.fail(Some(m.span()), at("`model` must not be empty")));
+            }
+            other => other.map(Spanned::into_inner),
+        };
+        let effort = raw
+            .effort
+            .map(|e| self.effort(e, "effort", &at))
+            .transpose()?;
 
         let rubric = match (raw.rubric, raw.rubric_file) {
             (Some(_), Some(file)) => {
@@ -185,7 +203,30 @@ impl Cx<'_> {
             scope,
             registers,
             rubric: rubric.get_ref().trim().to_owned(),
+            excludes,
+            model,
+            effort,
         })
+    }
+
+    /// One of the CLI's effort levels; `at` frames the error for where it was set.
+    fn effort(
+        &self,
+        effort: Spanned<String>,
+        field: &str,
+        at: &dyn Fn(&str) -> String,
+    ) -> Result<String, LoadError> {
+        if EFFORTS.contains(&effort.get_ref().as_str()) {
+            return Ok(effort.into_inner());
+        }
+        Err(self.fail(
+            Some(effort.span()),
+            at(&format!(
+                "unknown `{field}` `{}`; expected one of {}",
+                effort.get_ref(),
+                EFFORTS.join(", ")
+            )),
+        ))
     }
 }
 

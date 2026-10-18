@@ -23,6 +23,8 @@ pub struct Finding {
     pub matched: String,
     pub message: String,
     pub suggestion: Option<String>,
+    /// Index of the prose span it came from, in the spans it was evaluated against.
+    pub span: usize,
 }
 
 /// Every finding from every rule, ordered by line and then by rule order. `path` is the absolute
@@ -31,8 +33,13 @@ pub fn evaluate(ruleset: &Ruleset, spans: &[ProseSpan], path: &Path) -> Vec<Find
     let resolver = file_links::Resolver::new(path, ruleset, file_links::SEARCH_CAP);
     let is_markdown = kind_for(path) == Some(FileKind::Markdown);
     let mut out = Vec::new();
-    for rule in &ruleset.rules {
-        for span in spans.iter().filter(|s| rule.applies_to(s.register)) {
+    for rule in ruleset.rules.iter().filter(|r| !r.excludes.is_match(path)) {
+        for (index, span) in spans
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| rule.applies_to(s.register))
+        {
+            let from = out.len();
             match &rule.kind {
                 RuleKind::Phrase {
                     phrases,
@@ -56,7 +63,11 @@ pub fn evaluate(ruleset: &Ruleset, spans: &[ProseSpan], path: &Path) -> Vec<Find
                 RuleKind::OxfordComma { max_item_words } => out.extend(
                     oxford::serial_commas(&span.text, *max_item_words)
                         .into_iter()
-                        .map(|r| finding(rule, span, r)),
+                        .map(|s| {
+                            let mut f = finding(rule, span, s.comma);
+                            f.matched = shorten(&display(&span.text[s.list]));
+                            f
+                        }),
                 ),
                 RuleKind::SentenceLimit { limits } => {
                     out.extend(sentence_limit::check(rule, limits, span));
@@ -65,6 +76,9 @@ pub fn evaluate(ruleset: &Ruleset, spans: &[ProseSpan], path: &Path) -> Vec<Find
                     out.extend(file_links::check(rule, span, &resolver));
                 }
                 RuleKind::FileLinks => {}
+            }
+            for f in &mut out[from..] {
+                f.span = index;
             }
         }
     }
@@ -81,6 +95,16 @@ fn finding(rule: &Rule, span: &ProseSpan, range: Range<usize>) -> Finding {
         matched: display(&span.text[range]),
         message: rule.message.clone(),
         suggestion: rule.suggestion.clone(),
+        span: 0,
+    }
+}
+
+const MAX_MATCHED_CHARS: usize = 100;
+
+fn shorten(text: &str) -> String {
+    match text.char_indices().nth(MAX_MATCHED_CHARS) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text.to_owned(),
     }
 }
 

@@ -487,3 +487,36 @@ fn line_of_counts_newlines() {
     assert_eq!(line_of("a\nb\nc", 2), 2);
     assert_eq!(line_of("a\nb\nc", 99), 3);
 }
+
+#[test]
+fn per_rule_exclude_parses_and_bad_globs_name_the_rule() {
+    let rs = parse(
+        &with_rule(
+            "id = \"links\"\nkind = \"file_links\"\nseverity = \"block\"\nmessage = \"m\"\nexclude = [\"**/openspec/changes/**\", \"~/scratch/*\"]",
+        ),
+        Path::new("ruleset.toml"),
+        Path::new(HOME),
+    )
+    .unwrap();
+    let rule = &rs.rules[0];
+    assert!(
+        rule.excludes
+            .is_match(Path::new("/r/openspec/changes/x/design.md"))
+    );
+    assert!(
+        rule.excludes
+            .is_match(Path::new("/home/tester/scratch/a.md"))
+    );
+    assert!(!rule.excludes.is_match(Path::new("/r/docs/design.md")));
+    assert!(!rs.is_excluded(Path::new("/r/openspec/changes/x/design.md")));
+
+    let err = parse_err(&with_rule(
+        "id = \"p\"\nkind = \"phrase\"\nseverity = \"warn\"\nmessage = \"m\"\nphrases = [\"x\"]\nexclude = [\"a/[\"]",
+    ));
+    assert!(
+        err.message
+            .contains("rule `p`: invalid glob `a/[` in `exclude`"),
+        "{err}"
+    );
+    assert_eq!(err.line, Some(9));
+}

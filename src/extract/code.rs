@@ -140,6 +140,10 @@ static BUILTIN_DIRECTIVES: LazyLock<Regex> = LazyLock::new(|| {
     .expect("valid directive regex")
 });
 
+/// A section divider (`--- Setup ---`, `====`): a label, not prose, and it splits the run.
+static DIVIDER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(?:-{3,}|={3,}|\*{3,}|~{3,})").expect("valid divider regex"));
+
 /// How much code after a comment a judge gets to see.
 const CONTEXT_LINES: usize = 20;
 
@@ -218,7 +222,10 @@ pub(super) fn extract(lang: Lang, src: &str, directives: &[Regex]) -> Vec<ProseS
         .filter(|b| !is_license(b))
         .filter_map(|b| {
             let level = classify(lang, b, first_code);
-            let context = code_context(&src_lines, b[b.len() - 1].end_row());
+            let mut context = code_context(&src_lines, b[b.len() - 1].end_row());
+            if !b[0].own_line {
+                context = Some(with_own_row(src, &b[0], context));
+            }
             build(b.iter().flat_map(|p| p.lines.iter()), level, context)
         })
         .collect();
@@ -325,6 +332,7 @@ fn is_skipped(piece: &Piece, directives: &[Regex]) -> bool {
     piece.shebang
         || BUILTIN_DIRECTIVES.is_match(first)
         || directives.iter().any(|d| d.is_match(first))
+        || (!piece.block && piece.style == Style::Plain && DIVIDER.is_match(first))
 }
 
 fn merges(prev: &Piece, next: &Piece, src: &str) -> bool {
@@ -454,6 +462,16 @@ fn code_context(src_lines: &[&str], end_row: usize) -> Option<String> {
         .join("\n");
     let after = after.trim_end();
     (!after.trim().is_empty()).then(|| after.to_owned())
+}
+
+/// A trailing comment usually describes the code on its own row, so that row leads its context.
+fn with_own_row(src: &str, piece: &Piece, after: Option<String>) -> String {
+    let node = piece.node;
+    let code = src[node.start_byte() - node.start_position().column..node.start_byte()].trim_end();
+    match after {
+        Some(after) => format!("{code}\n{after}"),
+        None => code.to_owned(),
+    }
 }
 
 fn build<'a>(

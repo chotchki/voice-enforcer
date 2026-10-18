@@ -84,6 +84,7 @@ fn judge_sample_names_model_effort_and_rubric() {
         matched: "In conclusion, it works.".into(),
         message: "A recap.".into(),
         suggestion: None,
+        span: 0,
     };
     let sample = Sample::new("feedface", &finding, path, &spans, &rs);
     assert_eq!(sample.kind, Kind::Judge);
@@ -92,6 +93,67 @@ fn judge_sample_names_model_effort_and_rubric() {
     let hash = sample.rubric_sha256.unwrap();
     assert_eq!(hash.len(), 16);
     assert_eq!(hash, short_sha256("Flag recaps."));
+}
+
+const TABLE: &str = "| Area | Owner | Note |\n| --- | --- | --- |\n| Cache | first cell | We leverage it nightly. |\n";
+
+#[test]
+fn a_table_cell_sample_is_that_cell() {
+    let rs = ruleset();
+    let path = Path::new("/r/a.md");
+    let spans = extract(path, TABLE, &[]);
+    let third = spans
+        .iter()
+        .position(|s| s.raw == "We leverage it nightly.")
+        .expect("the third cell is a span");
+    let rule = evaluate(&rs, &spans, path).remove(0);
+    assert_eq!(rule.span, third);
+    let sample = Sample::new("0", &rule, path, &spans, &rs);
+    assert_eq!(sample.context, "We leverage it nightly.");
+
+    let judged = Finding {
+        rule_id: "recap".into(),
+        severity: Severity::Warn,
+        line: 3,
+        end_line: 3,
+        matched: "We leverage it nightly.".into(),
+        message: "m".into(),
+        suggestion: None,
+        span: third,
+    };
+    let sample = Sample::new("1", &judged, path, &spans, &rs);
+    assert_eq!(
+        sample.context, "We leverage it nightly.",
+        "not the row's first cell"
+    );
+}
+
+#[test]
+fn a_judge_sample_records_the_effort_it_ran_with() {
+    let rs = parse(
+        &RULES.replace(
+            "rubric = \"Flag recaps.\"",
+            "rubric = \"Flag recaps.\"\neffort = \"high\"",
+        ),
+        Path::new("/nowhere/ruleset.toml"),
+        Path::new("/h"),
+    )
+    .unwrap();
+    let finding = Finding {
+        rule_id: "recap".into(),
+        severity: Severity::Warn,
+        line: 1,
+        end_line: 1,
+        matched: "x".into(),
+        message: "m".into(),
+        suggestion: None,
+        span: 0,
+    };
+    let sample = Sample::new("2", &finding, Path::new("/r/a.md"), &[], &rs);
+    assert_eq!(
+        (sample.model.as_deref(), sample.effort.as_deref()),
+        (Some("haiku"), Some("high"))
+    );
 }
 
 #[test]
@@ -105,6 +167,7 @@ fn finding_outside_every_span_has_empty_context() {
         matched: "x".into(),
         message: "m".into(),
         suggestion: None,
+        span: 0,
     };
     let sample = Sample::new("00000000", &finding, Path::new("/r/a.md"), &[], &rs);
     assert_eq!(sample.context, "");

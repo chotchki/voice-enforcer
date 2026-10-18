@@ -464,3 +464,24 @@ fn docstrings_carry_the_body_after_them() {
     let spans = extract(Lang::Python, src, &[]);
     assert_eq!(spans[0].code_context.as_deref(), Some("    return 1"));
 }
+
+#[test]
+fn dividers_split_plain_runs_and_are_not_prose() {
+    let src = "fn f() {\n    // Load the cache first.\n    // --- Setup ---\n    // Then open the socket.\n    // ==========\n}\n";
+    assert_eq!(
+        texts(Lang::Rust, src),
+        ["Load the cache first.", "Then open the socket."]
+    );
+    let py = "# --- Load the cache. ---\nx = 1\n";
+    assert_eq!(texts(Lang::Python, py), Vec::<String>::new());
+}
+
+#[test]
+fn doc_comments_keep_their_rules_and_headings() {
+    let src =
+        "/// Opens it.\n///\n/// ---\n///\n/// ### Errors\n/// When it can't.\nfn open() {}\n";
+    let got = spans(Lang::Rust, src);
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!(got[0].1, Level::Item);
+    assert!(got[0].0.contains("### Errors"));
+}

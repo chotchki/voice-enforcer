@@ -71,6 +71,7 @@ pub struct Rule {
     pub message: String,
     pub suggestion: Option<String>,
     pub kind: RuleKind,
+    pub excludes: Excludes,
 }
 
 impl Rule {
@@ -78,6 +79,27 @@ impl Rule {
         self.registers.contains(&register)
     }
 }
+
+/// A rule's or judge's own `exclude` globs, on top of the ruleset's.
+#[derive(Debug, Clone, Default)]
+pub struct Excludes {
+    patterns: Vec<String>,
+    set: Option<GlobSet>,
+}
+
+impl Excludes {
+    pub fn is_match(&self, path: &Path) -> bool {
+        self.set.as_ref().is_some_and(|s| s.is_match(path))
+    }
+}
+
+impl PartialEq for Excludes {
+    fn eq(&self, other: &Self) -> bool {
+        self.patterns == other.patterns
+    }
+}
+
+impl Eq for Excludes {}
 
 #[derive(Debug)]
 pub enum RuleKind {
@@ -195,6 +217,7 @@ struct RawRule {
     pattern: Option<Spanned<String>>,
     max_item_words: Option<Spanned<i64>>,
     max_sentences: Option<Spanned<RawLimits>>,
+    exclude: Option<Spanned<Vec<Spanned<String>>>>,
 }
 
 #[derive(Deserialize)]
@@ -447,6 +470,7 @@ impl Cx<'_> {
             _ => vec![Register::LongForm, Register::Comment],
         };
         let registers = self.registers(raw.registers.as_ref(), default_registers, &at)?;
+        let excludes = self.excludes(raw.exclude.as_ref(), &at)?;
 
         let kind = match kind.get_ref().as_str() {
             "phrase" => {
@@ -524,6 +548,40 @@ impl Cx<'_> {
             message,
             suggestion,
             kind,
+            excludes,
+        })
+    }
+
+    fn excludes(
+        &self,
+        raw: Option<&Spanned<Vec<Spanned<String>>>>,
+        at: &dyn Fn(&str) -> String,
+    ) -> Result<Excludes, LoadError> {
+        let Some(list) = raw else {
+            return Ok(Excludes::default());
+        };
+        let mut globs = GlobSetBuilder::new();
+        let mut patterns = Vec::new();
+        for pattern in list.get_ref() {
+            let expanded = expand_home(pattern.get_ref(), self.home);
+            let compiled = glob(&expanded).map_err(|e| {
+                self.fail(
+                    Some(pattern.span()),
+                    at(&format!(
+                        "invalid glob `{}` in `exclude`: {e}",
+                        pattern.get_ref()
+                    )),
+                )
+            })?;
+            globs.add(compiled);
+            patterns.push(expanded);
+        }
+        let set = globs
+            .build()
+            .map_err(|e| self.fail(Some(list.span()), at(&e.to_string())))?;
+        Ok(Excludes {
+            patterns,
+            set: Some(set),
         })
     }
 

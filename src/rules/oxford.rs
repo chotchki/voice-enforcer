@@ -49,9 +49,16 @@ const INTRO_WORDS: &[&str] = &[
     "there",
 ];
 
-/// Byte ranges of each serial comma: a comma before the final `and`/`or` of a list of at least
-/// two earlier comma-separated items, every item after the first at most `max_item_words` long.
-pub(super) fn serial_commas(text: &str, max_item_words: usize) -> Vec<Range<usize>> {
+/// A serial comma and the list it closes, from the first item through the conjunction.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Serial {
+    pub comma: Range<usize>,
+    pub list: Range<usize>,
+}
+
+/// Each serial comma: a comma before the final `and`/`or` of a list of at least two earlier
+/// comma-separated items, every item after the first at most `max_item_words` long.
+pub(super) fn serial_commas(text: &str, max_item_words: usize) -> Vec<Serial> {
     let mut out = Vec::new();
     for range in sentence::sentences(text) {
         let s = &text[range.clone()];
@@ -64,7 +71,12 @@ pub(super) fn serial_commas(text: &str, max_item_words: usize) -> Vec<Range<usiz
             let items: Vec<&str> = clause.split(',').map(str::trim).collect();
             if is_list(&items, max_item_words) {
                 let comma = range.start + m.start();
-                out.push(comma..comma + 1);
+                let lead = clause.len() - clause.trim_start().len();
+                let start = range.start + before.len() - clause.len() + lead;
+                out.push(Serial {
+                    comma: comma..comma + 1,
+                    list: start..range.start + m.end(),
+                });
             }
         }
     }
@@ -114,11 +126,33 @@ mod tests {
     }
 
     #[test]
-    fn range_points_at_the_comma() {
-        let text = "red, green, and blue";
-        let got = serial_commas(text, 4);
-        assert_eq!(got, vec![10..11]);
-        assert_eq!(&text[got[0].clone()], ",");
+    fn ranges_cover_the_comma_and_the_list() {
+        for (text, list) in [
+            ("red, green, and blue", "red, green, and"),
+            (
+                "We support red, green, or blue.",
+                "We support red, green, or",
+            ),
+            ("Ranked: alpha, beta, and gamma.", "alpha, beta, and"),
+            ("One. Pick tea, coffee, or water.", "Pick tea, coffee, or"),
+        ] {
+            let got = serial_commas(text, 4);
+            assert_eq!(got.len(), 1, "{text}");
+            assert_eq!(&text[got[0].comma.clone()], ",");
+            assert_eq!(&text[got[0].list.clone()], list);
+        }
+    }
+
+    /// Known misfires: a comma-bracketed aside before a clause reads as a list. Pinned so a
+    /// fix shows up as a diff here; ad's design.md has what was tried.
+    #[test]
+    fn aside_before_a_clause_still_fires() {
+        for text in [
+            "Saves the file, open or not, and closes the tab.",
+            "The extra bytes stay in memory, past the end, and nothing reads them.",
+        ] {
+            assert_eq!(serial_commas(text, 4).len(), 1, "{text}");
+        }
     }
 
     #[test]

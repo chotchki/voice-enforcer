@@ -1,20 +1,22 @@
 //! `voice-enforcer hook`: the PreToolUse contract for Write, Edit and MultiEdit.
 
 mod guard;
+mod head;
 mod rebuild;
 
-use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;
-use similar::{DiffTag, TextDiff};
 
+use crate::changes::Changes;
 use crate::disputes::{self, Sample};
 use crate::env::Env;
 use crate::rules::Finding;
+use crate::ruleset::Scope;
 use crate::types::Severity;
 use crate::{judges, pipeline, ruleset};
 use guard::{Guard, Verdict};
@@ -114,20 +116,35 @@ fn decide(input: &str, env: &Env) -> Result<Option<Response>, String> {
         }
     };
 
-    let changed = changed_lines(before.as_deref(), &after);
-    let touched = |f: &Finding| {
-        changed
-            .as_ref()
-            .is_none_or(|c| (f.line..=f.end_line).any(|l| c.contains(&l)))
-    };
+    let changes = Changes::between(before.as_deref(), &after);
+    let touched = |f: &Finding| changes.touches(f.line..=f.end_line);
     let evaluated = pipeline::evaluate(&ruleset, &path, &after);
-    let mut findings: Vec<Finding> = evaluated.findings.into_iter().filter(touched).collect();
+    let mut head = head::Head::new(OsStr::new("git"), &path, &after, &evaluated.spans);
+    let mut findings = head.drop_existing(
+        evaluated
+            .findings
+            .iter()
+            .filter(|f| touched(f))
+            .cloned()
+            .collect(),
+        |_| false,
+    );
     let mut notes = Vec::new();
     // Judges only see a draft that got past the deterministic rules; a block means a rewrite.
     if !findings.iter().any(|f| f.severity == Severity::Block) {
         let cache = judges::Cache::new(&env.cache_dir(), env.now);
-        let outcome = judges::run(&ruleset, &evaluated.spans, changed.as_ref(), &cache);
-        findings.extend(outcome.findings.into_iter().filter(touched));
+        let outcome = judges::run(&ruleset, &path, &evaluated.spans, &changes, &cache);
+        // A whole judge's job includes text copied from elsewhere, so HEAD doesn't excuse it.
+        let whole = |f: &Finding| {
+            ruleset
+                .judges
+                .iter()
+                .any(|j| j.id == f.rule_id && j.scope == Scope::Whole)
+        };
+        findings.extend(head.drop_existing(
+            outcome.findings.into_iter().filter(touched).collect(),
+            whole,
+        ));
         notes = outcome.notes;
     }
 
@@ -147,16 +164,20 @@ fn decide(input: &str, env: &Env) -> Result<Option<Response>, String> {
         .map(|(f, id)| Sample::new(id, f, &path, &evaluated.spans, &ruleset))
         .collect();
     disputes::save(&state, &samples);
-    let hint = format!(
-        "Think a finding is wrong? Run `{} dispute <id> --reason \"why\"`. It records the finding for the ruleset owner; it doesn't change this result.",
-        crate::setup::exe_for_shell(env)
-    );
-    let list = |header: &str| listing(header, &findings, &ids, &notes, &shown, &hint);
     let blocks = findings
         .iter()
         .filter(|f| f.severity == Severity::Block)
         .count();
     let warns = findings.len() - blocks;
+    let mut hint = format!(
+        "Think a finding is wrong? Run `{} dispute <id> --reason \"why\"`. It records the finding for the ruleset owner; it doesn't change this result.",
+        crate::setup::exe_for_shell(env)
+    );
+    // Agents treat a warning as an order; a wrong one rewritten anyway is how good text got lost.
+    if warns > 0 {
+        hint.push_str(" A wrong warning needs no rewrite: dispute it and keep the text.");
+    }
+    let list = |header: &str| listing(header, &findings, &ids, &notes, &shown, &hint);
 
     if blocks == 0 {
         guard.on_clean();
@@ -180,20 +201,6 @@ fn decide(input: &str, env: &Env) -> Result<Option<Response>, String> {
 fn tool_input<T: DeserializeOwned>(payload: &Payload) -> Result<T, String> {
     T::deserialize(&payload.tool_input)
         .map_err(|e| format!("unexpected {} tool_input: {e}", payload.tool_name))
-}
-
-/// 1-based lines of `after` that are new or changed; `None` means every line (a new file).
-fn changed_lines(before: Option<&str>, after: &str) -> Option<HashSet<usize>> {
-    let before = before?;
-    let diff = TextDiff::from_lines(before, after);
-    Some(
-        diff.ops()
-            .iter()
-            .filter(|op| matches!(op.tag(), DiffTag::Insert | DiffTag::Replace))
-            .flat_map(similar::DiffOp::new_range)
-            .map(|i| i + 1)
-            .collect(),
-    )
 }
 
 fn display_path(path: &Path, cwd: &Path) -> String {

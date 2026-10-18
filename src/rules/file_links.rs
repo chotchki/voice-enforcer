@@ -94,7 +94,12 @@ struct Index {
 
 enum Resolution {
     Found(PathBuf),
-    Missing { truncated: bool },
+    /// More than one file matches, so there's no one link to suggest.
+    Ambiguous(usize),
+    Directory,
+    Missing {
+        truncated: bool,
+    },
 }
 
 impl<'a> Resolver<'a> {
@@ -118,24 +123,29 @@ impl<'a> Resolver<'a> {
         if relative.is_file() {
             return Resolution::Found(normalize(&relative));
         }
-        let Some(root) = &self.root else {
+        let at_root = self.root.as_ref().map(|r| r.join(mention));
+        if relative.is_dir() || at_root.as_ref().is_some_and(|p| p.is_dir()) {
+            return Resolution::Directory;
+        }
+        let (Some(root), Some(at_root)) = (&self.root, at_root) else {
             return Resolution::Missing { truncated: false };
         };
-        let at_root = root.join(mention);
         if at_root.is_file() {
             return Resolution::Found(normalize(&at_root));
         }
         let index = self.index.get_or_init(|| self.build_index(root));
         let wanted: Vec<Component> = Path::new(mention).components().collect();
-        let mut hits = index
+        let hits: Vec<&PathBuf> = index
             .files
             .iter()
-            .filter(|f| f.components().collect::<Vec<_>>().ends_with(&wanted));
-        match (hits.next(), hits.next()) {
-            (Some(hit), None) => Resolution::Found(root.join(hit)),
-            _ => Resolution::Missing {
+            .filter(|f| f.components().collect::<Vec<_>>().ends_with(&wanted))
+            .collect();
+        match hits.as_slice() {
+            [hit] => Resolution::Found(root.join(hit)),
+            [] => Resolution::Missing {
                 truncated: index.truncated,
             },
+            many => Resolution::Ambiguous(many.len()),
         }
     }
 
@@ -309,7 +319,16 @@ fn report(
                 None,
             ));
         }
-        Resolution::Missing { .. } => {}
+        Resolution::Ambiguous(n) if kind != Mention::MaybeName => out.push(make(
+            rule,
+            span,
+            offset,
+            Severity::Warn,
+            mention.to_owned(),
+            format!("named file `{mention}` matches {n} files, so it can't be linked"),
+            Some("name it by its path".to_owned()),
+        )),
+        Resolution::Missing { .. } | Resolution::Ambiguous(_) | Resolution::Directory => {}
     }
 }
 
@@ -331,6 +350,7 @@ fn make(
         matched,
         message,
         suggestion,
+        span: 0,
     }
 }
 

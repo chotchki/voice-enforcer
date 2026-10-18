@@ -1,0 +1,9 @@
+---
+source: src/judges/input.rs
+expression: input.text
+---
+=== span 1 · line 4 · comment (line) · CHANGED ===
+load word
+--- code context (not judged) ---
+    elif op == 32:
+        return 4

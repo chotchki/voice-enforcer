@@ -1,5 +1,6 @@
 //! voice-enforcer: holds Claude Code's written output to a voice ruleset at write time.
 
+mod changes;
 mod check;
 mod clock;
 mod disputes;

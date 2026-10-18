@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
+use crate::changes::Changes;
 use crate::env::Env;
 use crate::rules::Finding;
 use crate::ruleset::{self, Ruleset};
@@ -65,7 +66,7 @@ pub(crate) fn check(
         let evaluated = pipeline::evaluate(&ruleset, &file, &text);
         let mut found = evaluated.findings;
         if with_judges && !found.iter().any(|f| f.severity == Severity::Block) {
-            let outcome = judges::run(&ruleset, &evaluated.spans, None, &cache);
+            let outcome = judges::run(&ruleset, &file, &evaluated.spans, &Changes::all(), &cache);
             found.extend(outcome.findings);
             for note in outcome.notes {
                 let _ = writeln!(stderr, "voice-enforcer: {shown}: {note}");

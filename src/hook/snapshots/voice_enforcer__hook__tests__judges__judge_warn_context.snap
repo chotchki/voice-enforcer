@@ -5,4 +5,4 @@ expression: redact(out.context())
 voice-enforcer warnings for README.md (the write went through):
 - [warn] no-very at README.md:1 (id ########): "very" - Intensifier
 - [warn] recap at README.md:1 (id ########): "In conclusion, it is fast." - Restates the point. (suggestion: Cut it.)
-Think a finding is wrong? Run `/bin/voice-enforcer dispute <id> --reason "why"`. It records the finding for the ruleset owner; it doesn't change this result.
+Think a finding is wrong? Run `/bin/voice-enforcer dispute <id> --reason "why"`. It records the finding for the ruleset owner; it doesn't change this result. A wrong warning needs no rewrite: dispute it and keep the text.

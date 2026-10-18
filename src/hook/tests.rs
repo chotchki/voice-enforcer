@@ -68,6 +68,35 @@ impl Fixture {
         path
     }
 
+    /// Makes the repo a real git repo and commits everything in it.
+    fn commit(&self) {
+        std::fs::remove_dir_all(self.repo.join(".git")).unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["add", "-A"],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "-m",
+                "base",
+            ],
+        ] {
+            let ok = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&self.repo)
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        }
+    }
+
     fn payload(&self, session: &str, tool: &str, input: &Value) -> String {
         json!({
             "session_id": session,
@@ -193,6 +222,21 @@ fn blocking_write_is_denied_with_every_finding() {
 }
 
 #[test]
+fn two_oxford_commas_in_one_file_get_two_ids() {
+    let rules = format!(
+        "{RULES}\n[[rule]]\nid = \"oxford\"\nkind = \"oxford_comma\"\nseverity = \"warn\"\nmessage = \"Oxford comma\"\n"
+    );
+    let fx = Fixture::new(Some(&rules));
+    let out = fx.write(
+        "README.md",
+        "Pick tea, coffee, or water.\n\nBring forks, plates, and cups.\n",
+    );
+    let got = ids(out.context());
+    assert_eq!(got.len(), 2, "{}", out.context());
+    assert_ne!(got[0], got[1]);
+}
+
+#[test]
 fn every_finding_has_an_id_and_the_hint_closes_the_listing() {
     let fx = Fixture::new(Some(RULES));
     let out = fx.write("README.md", "We leverage a very fast cache.\n");
@@ -204,7 +248,23 @@ fn every_finding_has_an_id_and_the_hint_closes_the_listing() {
         ),
         "{last}"
     );
+    assert!(
+        last.ends_with(
+            "it doesn't change this result. A wrong warning needs no rewrite: dispute it and keep the text."
+        ),
+        "a mixed listing holds a warning: {last}"
+    );
+}
+
+#[test]
+fn the_keep_the_text_line_rides_only_with_warnings() {
+    let fx = Fixture::new(Some(RULES));
+    let blocks = fx.write("README.md", "We leverage it.\n");
+    let last = blocks.reason().lines().last().unwrap();
     assert!(last.ends_with("it doesn't change this result."), "{last}");
+    let warns = fx.write("NOTES.md", "A very fast cache.\n");
+    let last = warns.context().lines().last().unwrap();
+    assert!(last.ends_with("dispute it and keep the text."), "{last}");
 }
 
 #[test]
@@ -327,6 +387,45 @@ fn untouched_lines_are_not_judged() {
         Some("deny"),
         "touching the line makes it count"
     );
+}
+
+#[test]
+fn rewrapping_a_paragraph_changes_nothing() {
+    let fx = Fixture::new(Some(RULES));
+    fx.file(
+        "README.md",
+        "Intro.\n\nWe leverage the cache so every\nlookup stays fast.\n",
+    );
+    let out = fx.write(
+        "README.md",
+        "Intro.\n\nWe leverage the cache\nso every lookup stays fast.\n",
+    );
+    assert!(out.silent(), "only line breaks moved");
+}
+
+#[test]
+fn reindenting_a_comment_changes_nothing() {
+    let fx = Fixture::new(Some(RULES));
+    fx.file("lib.rs", "fn f() {\n        // leverage the pool\n}\n");
+    let out = fx.write("lib.rs", "fn f() {\n    // leverage the pool\n}\n");
+    assert!(out.silent());
+    let out = fx.write("lib.rs", "fn f() {\n    // leverage the pool, always\n}\n");
+    assert_eq!(out.decision(), Some("deny"), "a changed word still counts");
+}
+
+#[test]
+fn text_already_at_head_is_unchanged() {
+    let fx = Fixture::new(Some(RULES));
+    fx.file(
+        "main.rs",
+        "fn main() {\n        // We leverage the pool so every worker shares it.\n        run();\n}\n",
+    );
+    fx.commit();
+    let moved =
+        "pub fn boot() {\n    // We leverage the pool so every worker shares it.\n    run();\n}\n";
+    assert!(fx.write("boot.rs", moved).silent(), "a move, not a write");
+    let reworded = moved.replace("every worker", "each worker");
+    assert_eq!(fx.write("boot.rs", &reworded).decision(), Some("deny"));
 }
 
 #[test]
@@ -495,11 +594,6 @@ fn loop_guard_sessions_are_independent() {
 
 #[test]
 fn helpers() {
-    assert_eq!(changed_lines(None, "a\nb\n"), None);
-    let changed = changed_lines(Some("a\nb\nc\n"), "a\nB\nc\nd\n").unwrap();
-    let mut changed: Vec<_> = changed.into_iter().collect();
-    changed.sort_unstable();
-    assert_eq!(changed, vec![2, 4]);
     assert_eq!(
         display_path(Path::new("/r/docs/a.md"), Path::new("/r")),
         "docs/a.md"
@@ -577,6 +671,23 @@ rubric = "RECAP_RUBRIC"
         assert_eq!(out.decision(), None);
         insta::assert_snapshot!("judge_warn_context", redact(out.context()));
         assert_eq!(fake.calls(), 1);
+    }
+
+    #[test]
+    fn only_a_whole_judge_flags_a_paragraph_copied_from_head() {
+        for (scope, flagged) in [("whole", true), ("diff", false)] {
+            let fake = recap_fake();
+            let fx = Fixture::new(Some(&rules_with_judges(
+                &fake,
+                "warn",
+                scope,
+                "[\"long_form\"]",
+            )));
+            fx.file("README.md", "Intro.\n\nIn conclusion, it is fast.\n");
+            fx.commit();
+            let out = fx.write("NOTES.md", "In conclusion, it is fast.\n");
+            assert_eq!(!out.silent(), flagged, "{scope}");
+        }
     }
 
     #[test]

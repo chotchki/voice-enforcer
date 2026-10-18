@@ -31,7 +31,7 @@ pub fn sentences(text: &str) -> Vec<Range<usize>> {
             }
         }
         let at_break = text[end..].chars().next().is_none_or(char::is_whitespace);
-        if at_break && !(c == '.' && is_abbreviation(text, i)) {
+        if at_break && !(c == '.' && is_abbreviation(text, i)) && !is_soft_stop(&text[i..end]) {
             push_trimmed(&mut out, text, start..end);
             start = end;
         }
@@ -50,6 +50,22 @@ pub fn containing(text: &str, offset: usize) -> Range<usize> {
         .into_iter()
         .find(|r| offset < r.end)
         .unwrap_or(0..text.len())
+}
+
+/// An ellipsis, or a `?` / `!` inside a quote (`"Retry?" after 5s`): both usually run on, and
+/// undercounting is the safe side of a limit.
+fn is_soft_stop(run: &str) -> bool {
+    const QUOTES: &[char] = &['"', '\'', '\u{201D}', '\u{2019}'];
+    let mut chars = run.chars().peekable();
+    let mut dots = 0;
+    while let Some(c) = chars.next() {
+        match c {
+            '.' => dots += 1,
+            '?' | '!' if chars.peek().is_some_and(|n| QUOTES.contains(n)) => return true,
+            _ => {}
+        }
+    }
+    dots >= 2
 }
 
 fn is_abbreviation(text: &str, dot: usize) -> bool {
@@ -116,7 +132,23 @@ mod tests {
                 &["No terminal punctuation here"],
             ),
             ("TODO\nfix this", &["TODO\nfix this"]),
-            ("Wait... what?! Really.", &["Wait...", "what?!", "Really."]),
+            ("Wait... what?! Really.", &["Wait... what?!", "Really."]),
+            (
+                "run <file> [args ...]  (flags go last)",
+                &["run <file> [args ...]  (flags go last)"],
+            ),
+            (
+                "Shows \"Retry?\" after 5s, then gives up.",
+                &["Shows \"Retry?\" after 5s, then gives up."],
+            ),
+            (
+                "It said \u{201C}Stop!\u{201D} and froze. Next.",
+                &["It said \u{201C}Stop!\u{201D} and froze.", "Next."],
+            ),
+            (
+                "Then\u{2026} later. Done.",
+                &["Then\u{2026} later.", "Done."],
+            ),
             (
                 "He said \"stop.\" Then left.",
                 &["He said \"stop.\"", "Then left."],

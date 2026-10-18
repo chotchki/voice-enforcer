@@ -60,7 +60,13 @@ fn findings_come_back_verified() {
     let rs = ruleset(&fake, TWO_JUDGES);
     let spans = extract(Path::new("a.md"), DOC, &[]);
     let dir = tempfile::tempdir().unwrap();
-    let out = run(&rs, &spans, None, &cache(dir.path()));
+    let out = run(
+        &rs,
+        Path::new("/r/a.md"),
+        &spans,
+        &Changes::all(),
+        &cache(dir.path()),
+    );
     assert_eq!(out.notes, Vec::<String>::new());
     assert_eq!(out.findings.len(), 1);
     assert_eq!(out.findings[0].rule_id, "recap");
@@ -70,19 +76,62 @@ fn findings_come_back_verified() {
 }
 
 #[test]
+fn quotes_must_hold_a_changed_word() {
+    const WHOLE: &str = r#"
+[[judge]]
+id = "repeats"
+severity = "warn"
+scope = "whole"
+registers = ["long_form"]
+rubric = "R"
+"#;
+    let before = "Old line stays.\n\nThe cache is warm. It is fast.\n";
+    let after = "Old line stays.\n\nThe cache is warm. It is quick.\n";
+    let changes = Changes::between(Some(before), after);
+    let spans = extract(Path::new("a.md"), after, &[]);
+    let quotes = json!([
+        {"quote": "The cache is warm.", "explanation": "Old sentence."},
+        {"quote": "It is quick.", "explanation": "New sentence."},
+        {"quote": "Old line stays.", "explanation": "Untouched line."}
+    ]);
+    for (judges, kept) in [
+        (TWO_JUDGES, vec!["It is quick."]),
+        (WHOLE, vec!["It is quick."]),
+    ] {
+        let fake = FakeClaude::answering(&quotes);
+        let dir = tempfile::tempdir().unwrap();
+        let out = run(
+            &ruleset(&fake, judges),
+            Path::new("/r/a.md"),
+            &spans,
+            &changes,
+            &cache(dir.path()),
+        );
+        let got: Vec<&str> = out.findings.iter().map(|f| f.matched.as_str()).collect();
+        assert_eq!(got, kept, "{judges}");
+    }
+}
+
+#[test]
 fn no_judges_or_nothing_changed_means_no_calls() {
     let fake = FakeClaude::answering(&json!([]));
     let spans = extract(Path::new("a.md"), DOC, &[]);
     let dir = tempfile::tempdir().unwrap();
-    let changed: HashSet<usize> = [42].into();
     let out = run(
         &ruleset(&fake, TWO_JUDGES),
+        Path::new("/r/a.md"),
         &spans,
-        Some(&changed),
+        &Changes::on_lines(&[42]),
         &cache(dir.path()),
     );
     assert_eq!(out, Outcome::default());
-    let out = run(&ruleset(&fake, ""), &spans, None, &cache(dir.path()));
+    let out = run(
+        &ruleset(&fake, ""),
+        Path::new("/r/a.md"),
+        &spans,
+        &Changes::all(),
+        &cache(dir.path()),
+    );
     assert_eq!(out, Outcome::default());
     assert_eq!(fake.calls(), 0);
 }
@@ -106,7 +155,13 @@ rubric = "B"
     let spans = extract(Path::new("a.md"), DOC, &[]);
     let dir = tempfile::tempdir().unwrap();
     let start = Instant::now();
-    let out = run(&ruleset(&fake, judges), &spans, None, &cache(dir.path()));
+    let out = run(
+        &ruleset(&fake, judges),
+        Path::new("/r/a.md"),
+        &spans,
+        &Changes::all(),
+        &cache(dir.path()),
+    );
     let took = start.elapsed();
     assert_eq!(out, Outcome::default());
     assert_eq!(fake.calls(), 2);
@@ -121,13 +176,31 @@ fn identical_input_is_served_from_the_cache() {
     let rs = ruleset(&fake, TWO_JUDGES);
     let spans = extract(Path::new("a.md"), DOC, &[]);
     let dir = tempfile::tempdir().unwrap();
-    let first = run(&rs, &spans, None, &cache(dir.path()));
-    let second = run(&rs, &spans, None, &cache(dir.path()));
+    let first = run(
+        &rs,
+        Path::new("/r/a.md"),
+        &spans,
+        &Changes::all(),
+        &cache(dir.path()),
+    );
+    let second = run(
+        &rs,
+        Path::new("/r/a.md"),
+        &spans,
+        &Changes::all(),
+        &cache(dir.path()),
+    );
     assert_eq!(first, second);
     assert_eq!(fake.calls(), 1);
 
     let changed_rubric = ruleset(&fake, &TWO_JUDGES.replace("RECAP_RUBRIC", "NEW_RUBRIC"));
-    run(&changed_rubric, &spans, None, &cache(dir.path()));
+    run(
+        &changed_rubric,
+        Path::new("/r/a.md"),
+        &spans,
+        &Changes::all(),
+        &cache(dir.path()),
+    );
     assert_eq!(fake.calls(), 2, "a rubric change busts the cache");
 }
 
@@ -137,7 +210,13 @@ fn failures_become_notes_and_are_not_cached() {
     let rs = ruleset(&fake, TWO_JUDGES);
     let spans = extract(Path::new("a.md"), DOC, &[]);
     let dir = tempfile::tempdir().unwrap();
-    let out = run(&rs, &spans, None, &cache(dir.path()));
+    let out = run(
+        &rs,
+        Path::new("/r/a.md"),
+        &spans,
+        &Changes::all(),
+        &cache(dir.path()),
+    );
     assert_eq!(out.findings, vec![]);
     assert_eq!(out.notes.len(), 1);
     assert!(
@@ -150,7 +229,13 @@ fn failures_become_notes_and_are_not_cached() {
         "{}",
         out.notes[0]
     );
-    run(&rs, &spans, None, &cache(dir.path()));
+    run(
+        &rs,
+        Path::new("/r/a.md"),
+        &spans,
+        &Changes::all(),
+        &cache(dir.path()),
+    );
     assert_eq!(fake.calls(), 2, "a failure is retried, not cached");
 }
 
@@ -162,8 +247,9 @@ fn oversized_input_is_a_note_not_a_call() {
     let dir = tempfile::tempdir().unwrap();
     let out = run(
         &ruleset(&fake, TWO_JUDGES),
+        Path::new("/r/a.md"),
         &spans,
-        None,
+        &Changes::all(),
         &cache(dir.path()),
     );
     assert_eq!(out.notes.len(), 1);
@@ -173,4 +259,55 @@ fn oversized_input_is_a_note_not_a_call() {
         out.notes[0]
     );
     assert_eq!(fake.calls(), 0);
+}
+
+#[test]
+fn a_judge_skips_excluded_paths() {
+    let fake = FakeClaude::answering(&json!([]));
+    let judges = TWO_JUDGES.replace(
+        "rubric = \"RECAP_RUBRIC\"",
+        "rubric = \"RECAP_RUBRIC\"\nexclude = [\"/r/skip/**\"]",
+    );
+    let rs = ruleset(&fake, &judges);
+    let spans = extract(Path::new("a.md"), DOC, &[]);
+    let dir = tempfile::tempdir().unwrap();
+    run(
+        &rs,
+        Path::new("/r/skip/a.md"),
+        &spans,
+        &Changes::all(),
+        &cache(dir.path()),
+    );
+    assert_eq!(fake.calls(), 0);
+    run(
+        &rs,
+        Path::new("/r/keep/a.md"),
+        &spans,
+        &Changes::all(),
+        &cache(dir.path()),
+    );
+    assert_eq!(fake.calls(), 1);
+}
+
+#[test]
+fn a_judges_own_effort_reaches_only_its_call() {
+    let spans = extract(Path::new("a.md"), DOC, &[]);
+    for (extra, want) in [("\neffort = \"high\"", "high"), ("", "medium")] {
+        let fake = FakeClaude::answering(&json!([]));
+        let judges = TWO_JUDGES.replace(
+            "rubric = \"RECAP_RUBRIC\"",
+            &format!("rubric = \"RECAP_RUBRIC\"{extra}"),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        run(
+            &ruleset(&fake, &judges),
+            Path::new("/r/a.md"),
+            &spans,
+            &Changes::all(),
+            &cache(dir.path()),
+        );
+        let argv = fake.argv();
+        let at = argv.iter().position(|a| a == "--effort").unwrap();
+        assert_eq!(argv[at + 1], want);
+    }
 }

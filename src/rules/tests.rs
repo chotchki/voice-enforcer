@@ -41,6 +41,7 @@ fn phrase_hit_carries_the_full_finding() {
             matched: "Leverage".into(),
             message: "Marketing verb".into(),
             suggestion: Some("use".into()),
+            span: 0,
         }]
     );
 }
@@ -144,8 +145,20 @@ message = "Drop the serial comma"
     let got = run(rules, "x.md", "Intro.\n\nWe like red, green, and blue.\n");
     assert_eq!(got.len(), 1);
     assert_eq!(got[0].line, 3);
-    assert_eq!(got[0].matched, ",");
+    assert_eq!(got[0].matched, "We like red, green, and");
     assert_eq!(run(rules, "x.md", "We like red, green and blue.\n"), vec![]);
+    let wrapped = run(
+        rules,
+        "x.md",
+        "We like `a`, b,\nand c and this list goes on for a while.\n",
+    );
+    assert_eq!(
+        (wrapped[0].line, wrapped[0].matched.as_str()),
+        (1, "We like `…`, b, and")
+    );
+    let long = format!("{}, b, and c\n", "word ".repeat(30).trim_end());
+    let got = run(rules, "x.md", &long);
+    assert!(got[0].matched.ends_with('…') && got[0].matched.chars().count() == 101);
 }
 
 const LIMITS: &str = r#"
@@ -210,4 +223,24 @@ fn findings_are_ordered_by_line() {
 #[test]
 fn display_shows_masks_and_collapses_whitespace() {
     assert_eq!(display(&format!("a  {MASK}\n b")), "a `…` b");
+}
+
+#[test]
+fn a_rule_skips_its_excluded_paths_and_the_others_still_run() {
+    let rules = format!(
+        "{LEVERAGE}\n[[rule]]\nid = \"no-very\"\nkind = \"phrase\"\nseverity = \"warn\"\nmessage = \"m\"\nphrases = [\"very\"]\nexclude = [\"**/openspec/**\"]\n"
+    );
+    let got = run(&rules, "openspec/x.md", "A very leverage line.\n");
+    let ids: Vec<&str> = got.iter().map(|f| f.rule_id.as_str()).collect();
+    assert_eq!(ids, ["no-leverage"]);
+    assert_eq!(run(&rules, "docs/x.md", "A very leverage line.\n").len(), 2);
+}
+
+#[test]
+fn list_items_and_soft_stops_do_not_count() {
+    let rules = LIMITS.replace("item = 2 }", "item = 2, module = 5 }");
+    let bulleted = "//! Reads the archive. One header, then entries. Little-endian.\n//!\n//! - magic: four bytes. Always the same.\n//! - count: a u32. Never zero.\n//! - flags: one byte. Reserved.\n//! - table: offsets. Sorted.\n//! - names: strings. Null-terminated.\n//! - data: blobs. Aligned.\n";
+    assert_eq!(run(&rules, "x.rs", bulleted), vec![]);
+    let usage = "fn f() {\n    // run <file> [args ...]  (flags go last)\n    // Shows \"Retry?\" after 5s, then gives up.\n}\n";
+    assert_eq!(run(&rules, "x.rs", usage), vec![]);
 }

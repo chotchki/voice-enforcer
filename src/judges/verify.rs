@@ -1,5 +1,6 @@
 //! Turns a verdict into findings, keeping only quotes that really are in the judged text.
 
+use crate::changes::Changes;
 use crate::extract::ProseSpan;
 use crate::judges::input::Input;
 use crate::judges::runner::Verdict;
@@ -13,15 +14,20 @@ pub(crate) fn findings(
     verdict: &Verdict,
     input: &Input,
     spans: &[ProseSpan],
+    changes: &Changes,
 ) -> Vec<Finding> {
     verdict
         .findings
         .iter()
+        .filter(|raw| raw.violates)
         .filter_map(|raw| {
-            let (line, end_line) = input
+            let (span, line, end_line) = input
                 .judged
                 .iter()
-                .find_map(|&i| locate(&spans[i], &raw.quote))?;
+                .find_map(|&i| locate(&spans[i], &raw.quote).map(|(line, end)| (i, line, end)))?;
+            if !changes.quote_overlaps(line..=end_line, &raw.quote) {
+                return None;
+            }
             Some(Finding {
                 rule_id: judge.id.clone(),
                 severity: judge.severity,
@@ -35,6 +41,7 @@ pub(crate) fn findings(
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
                     .map(str::to_owned),
+                span,
             })
         })
         .collect()
@@ -103,6 +110,9 @@ mod tests {
             scope: Scope::Diff,
             registers: vec![Register::LongForm, Register::Comment],
             rubric: "r".into(),
+            excludes: crate::ruleset::Excludes::default(),
+            model: None,
+            effort: None,
         }
     }
 
@@ -114,6 +124,7 @@ mod tests {
                     quote: (*q).to_owned(),
                     explanation: " A recap. ".into(),
                     suggestion: Some(" ".into()),
+                    violates: true,
                 })
                 .collect(),
         }
@@ -125,7 +136,7 @@ mod tests {
             text: String::new(),
             judged,
         };
-        findings(&judge(), &verdict(quotes), &input, &spans)
+        findings(&judge(), &verdict(quotes), &input, &spans, &Changes::all())
     }
 
     #[test]
@@ -146,7 +157,23 @@ mod tests {
                 matched: "In conclusion, it works.".into(),
                 message: "A recap.".into(),
                 suggestion: None,
+                span: 1,
             }]
+        );
+    }
+
+    #[test]
+    fn a_finding_the_judge_clears_is_dropped() {
+        let spans = extract(Path::new("a.md"), "It works.\n", &[]);
+        let input = Input {
+            text: String::new(),
+            judged: vec![0],
+        };
+        let mut v = verdict(&["It works."]);
+        v.findings[0].violates = false;
+        assert_eq!(
+            findings(&judge(), &v, &input, &spans, &Changes::all()),
+            vec![]
         );
     }
 
@@ -188,6 +215,27 @@ mod tests {
     }
 
     #[test]
+    fn unchanged_sentence_in_a_changed_span_is_dropped() {
+        let before = "It works. It is fast.\n";
+        let after = "It works. It is quick.\n";
+        let spans = extract(Path::new("a.md"), after, &[]);
+        let input = Input {
+            text: String::new(),
+            judged: vec![0],
+        };
+        let changes = Changes::between(Some(before), after);
+        let got = findings(
+            &judge(),
+            &verdict(&["It works.", "It is quick."]),
+            &input,
+            &spans,
+            &changes,
+        );
+        let quotes: Vec<&str> = got.iter().map(|f| f.matched.as_str()).collect();
+        assert_eq!(quotes, ["It is quick."]);
+    }
+
+    #[test]
     fn code_context_is_never_a_source() {
         let src = "fn f() {\n    // bump it\n    count += 1;\n}\n";
         assert_eq!(run("x.rs", src, vec![0], &["count += 1;"]), vec![]);
@@ -218,9 +266,10 @@ mod tests {
                 quote: long.clone(),
                 explanation: "e".into(),
                 suggestion: Some(" cut it ".into()),
+                violates: true,
             }],
         };
-        let got = findings(&judge(), &v, &input, &spans);
+        let got = findings(&judge(), &v, &input, &spans, &Changes::all());
         assert_eq!(got[0].suggestion.as_deref(), Some("cut it"));
         assert!(got[0].matched.ends_with('…'));
         assert_eq!(got[0].matched.chars().count(), MAX_MATCHED_CHARS + 1);

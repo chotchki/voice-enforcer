@@ -1,4 +1,4 @@
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
 
 use super::{Annotation, LineIndex, ProseSpan, SpanBuilder};
 use crate::types::Register;
@@ -49,9 +49,26 @@ pub(super) fn extract(src: &str) -> Vec<ProseSpan> {
                 | TagEnd::FootnoteDefinition,
             )
             | Event::Rule => flush(&mut cur, &mut out),
-            Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) => {
+            Event::Start(
+                Tag::Link {
+                    link_type,
+                    dest_url,
+                    ..
+                }
+                | Tag::Image {
+                    link_type,
+                    dest_url,
+                    ..
+                },
+            ) => {
                 let b = builder(&mut cur);
-                links.push((b.len(), dest_url.into_string()));
+                // An `<a@b.c>` autolink arrives without its scheme.
+                let dest = if link_type == LinkType::Email {
+                    format!("mailto:{dest_url}")
+                } else {
+                    dest_url.into_string()
+                };
+                links.push((b.len(), dest));
             }
             Event::End(TagEnd::Link | TagEnd::Image) => {
                 if let Some((start, dest)) = links.pop() {

@@ -7,10 +7,11 @@ mod input;
 mod runner;
 mod verify;
 
-use std::collections::HashSet;
+use std::path::Path;
 
 pub(crate) use cache::Cache;
 
+use crate::changes::Changes;
 use crate::extract::ProseSpan;
 use crate::rules::Finding;
 use crate::ruleset::Ruleset;
@@ -23,18 +24,18 @@ pub(crate) struct Outcome {
     pub notes: Vec<String>,
 }
 
-/// Runs every judge with changed prose to read, in parallel, through the cache. `changed` is the
-/// set of changed lines, or `None` when every line counts as changed.
+/// Runs every judge with changed prose to read, in parallel, through the cache.
 pub(crate) fn run(
     ruleset: &Ruleset,
+    path: &Path,
     spans: &[ProseSpan],
-    changed: Option<&HashSet<usize>>,
+    changes: &Changes,
     cache: &Cache,
 ) -> Outcome {
     let mut outcome = Outcome::default();
     let mut jobs = Vec::new();
-    for judge in &ruleset.judges {
-        match input::prepare(judge, spans, changed) {
+    for judge in ruleset.judges.iter().filter(|j| !j.excludes.is_match(path)) {
+        match input::prepare(judge, spans, changes) {
             Prepared::Skip => {}
             Prepared::TooLarge(chars) => outcome.notes.push(format!(
                 "judge `{}` skipped: its input was {chars} characters, over the {} limit",
@@ -49,16 +50,16 @@ pub(crate) fn run(
     }
     cache.prune();
 
-    let settings = &ruleset.judge_settings;
     let results: Vec<_> = std::thread::scope(|s| {
         let handles: Vec<_> = jobs
             .into_iter()
             .map(|(judge, input)| {
+                let settings = judge.settings(&ruleset.judge_settings);
                 s.spawn(move || {
-                    let key = Cache::key(judge, settings, &input.text);
+                    let key = Cache::key(judge, &settings, &input.text);
                     let verdict = cache.get(&key).map_or_else(
                         || {
-                            let fresh = runner::call(settings, judge, &input.text);
+                            let fresh = runner::call(&settings, judge, &input.text);
                             if let Ok(v) = &fresh {
                                 cache.put(&key, v);
                             }
@@ -80,7 +81,7 @@ pub(crate) fn run(
         match verdict {
             Ok(verdict) => outcome
                 .findings
-                .extend(verify::findings(judge, &verdict, &input, spans)),
+                .extend(verify::findings(judge, &verdict, &input, spans, changes)),
             Err(failure) => outcome.notes.push(format!(
                 "judge `{}` {failure}, so it wasn't checked",
                 judge.id

@@ -129,6 +129,26 @@ fn walk_skips_ignored_excluded_and_unknown_files() {
 }
 
 #[test]
+fn per_rule_excludes_leave_the_walk_alone() {
+    let rules = format!("{RULES}exclude = [\"**/notes/**\"]\n");
+    let fx = Fixture::new(Some(&rules));
+    fx.file("notes/a.md", "We leverage a very big cache.\n");
+    let out = fx.run(&["check", "--format", "json", "."]);
+    let found: Value = serde_json::from_str(&out.stdout).unwrap();
+    let ids: Vec<&str> = found
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["rule_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        ["no-leverage"],
+        "the file is walked; only no-very skips it"
+    );
+}
+
+#[test]
 fn paths_outside_cwd_print_absolute() {
     let fx = Fixture::new(Some(RULES));
     let outside = fx.dir.path().join("outside.md");

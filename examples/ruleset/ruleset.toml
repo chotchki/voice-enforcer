@@ -62,12 +62,14 @@ severity = "warn"
 message = "Comment runs long; trim it or move the detail into docs"
 max_sentences = { line = 1, item = 2, module = 5 }
 
-# Readers on GitHub can click a link; they can't click a bare file name.
+# Readers on GitHub can click a link; they can't click a bare file name. A folder that moves (an
+# OpenSpec change folder does on archive) breaks relative links, so this rule skips it.
 [[rule]]
 id = "link-named-files"
 kind = "file_links"
 severity = "warn"
 message = "Named file isn't linked"
+exclude = ["**/openspec/changes/**"]
 
 # LLM judges: one Haiku call each, run only when nothing above blocks and the write changed prose
 # the judge reads. These are the defaults; delete the table to keep them.

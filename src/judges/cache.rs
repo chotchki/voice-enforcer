@@ -29,9 +29,13 @@ impl Cache {
     }
 
     pub(crate) fn key(judge: &Judge, settings: &JudgeSettings, input: &str) -> String {
+        Self::key_at(HARNESS_VERSION, judge, settings, input)
+    }
+
+    fn key_at(harness: u32, judge: &Judge, settings: &JudgeSettings, input: &str) -> String {
         let mut hash = Sha256::new();
         for part in [
-            HARNESS_VERSION.to_string().as_str(),
+            harness.to_string().as_str(),
             &judge.id,
             &judge.rubric,
             &settings.model,
@@ -118,6 +122,9 @@ mod tests {
             scope: Scope::Diff,
             registers: vec![Register::LongForm],
             rubric: rubric.into(),
+            excludes: crate::ruleset::Excludes::default(),
+            model: None,
+            effort: None,
         }
     }
 
@@ -127,6 +134,7 @@ mod tests {
                 quote: "q".into(),
                 explanation: "e".into(),
                 suggestion: None,
+                violates: true,
             }],
         }
     }
@@ -147,6 +155,11 @@ mod tests {
         let mut renamed = judge("r");
         renamed.id = "k".into();
         assert_ne!(base, Cache::key(&renamed, &s, "in"));
+        assert_ne!(
+            base,
+            Cache::key_at(HARNESS_VERSION - 1, &judge("r"), &s, "in"),
+            "a harness bump retires every cached verdict"
+        );
     }
 
     #[test]

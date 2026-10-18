@@ -1,8 +1,8 @@
 //! The text a judge reads: labeled spans, the changed ones marked, code context set apart.
 
-use std::collections::HashSet;
 use std::fmt::Write as _;
 
+use crate::changes::Changes;
 use crate::extract::ProseSpan;
 use crate::ruleset::{Judge, Scope};
 use crate::types::Register;
@@ -25,21 +25,16 @@ pub(crate) struct Input {
     pub judged: Vec<usize>,
 }
 
-/// Whether any line of `span` changed; `None` means every line did (a new file, or `check`).
-pub(crate) fn is_changed(span: &ProseSpan, changed: Option<&HashSet<usize>>) -> bool {
-    changed.is_none_or(|c| (span.first_line()..=span.last_line()).any(|l| c.contains(&l)))
+pub(crate) fn is_changed(span: &ProseSpan, changes: &Changes) -> bool {
+    changes.touches(span.first_line()..=span.last_line())
 }
 
-pub(crate) fn prepare(
-    judge: &Judge,
-    spans: &[ProseSpan],
-    changed: Option<&HashSet<usize>>,
-) -> Prepared {
+pub(crate) fn prepare(judge: &Judge, spans: &[ProseSpan], changes: &Changes) -> Prepared {
     let candidates: Vec<(usize, &ProseSpan, bool)> = spans
         .iter()
         .enumerate()
         .filter(|(_, s)| judge.applies_to(s.register))
-        .map(|(i, s)| (i, s, is_changed(s, changed)))
+        .map(|(i, s)| (i, s, is_changed(s, changes)))
         .collect();
     let judged: Vec<usize> = candidates
         .iter()
@@ -97,6 +92,9 @@ mod tests {
             scope,
             registers,
             rubric: "r".into(),
+            excludes: crate::ruleset::Excludes::default(),
+            model: None,
+            effort: None,
         }
     }
 
@@ -119,11 +117,11 @@ mod tests {
     #[test]
     fn diff_scope_sends_only_changed_spans() {
         let spans = extract(Path::new("README.md"), README, &[]);
-        let changed: HashSet<usize> = [6].into();
+        let changed = Changes::on_lines(&[6]);
         let input = ready(prepare(
             &judge(Scope::Diff, vec![Register::LongForm]),
             &spans,
-            Some(&changed),
+            &changed,
         ));
         assert_eq!(input.judged, vec![2]);
         insta::assert_snapshot!("diff_input", input.text);
@@ -132,11 +130,11 @@ mod tests {
     #[test]
     fn whole_scope_marks_the_changed_spans() {
         let spans = extract(Path::new("README.md"), README, &[]);
-        let changed: HashSet<usize> = [5].into();
+        let changed = Changes::on_lines(&[5]);
         let input = ready(prepare(
             &judge(Scope::Whole, vec![Register::LongForm]),
             &spans,
-            Some(&changed),
+            &changed,
         ));
         assert_eq!(input.judged, vec![2]);
         insta::assert_snapshot!("whole_input", input.text);
@@ -149,30 +147,59 @@ mod tests {
         let input = ready(prepare(
             &judge(Scope::Diff, vec![Register::Comment]),
             &spans,
-            None,
+            &Changes::all(),
         ));
         insta::assert_snapshot!("comment_input", input.text);
     }
 
     #[test]
+    fn trailing_comments_see_their_own_row() {
+        let py = "def f(op):\n    if op == 1:\n        pass\n    elif op == 32:  # load word\n        return 4\n";
+        let rs = "fn f() {\n    let n = 3; // retries\n    go(n);\n}\n";
+        let tail = "x = 1  # last line\n";
+        for (name, path, src) in [
+            ("trailing_python_input", "x.py", py),
+            ("trailing_rust_input", "x.rs", rs),
+            ("trailing_last_line_input", "y.py", tail),
+        ] {
+            let spans = extract(Path::new(path), src, &[]);
+            let input = ready(prepare(
+                &judge(Scope::Diff, vec![Register::Comment]),
+                &spans,
+                &Changes::all(),
+            ));
+            insta::assert_snapshot!(name, input.text);
+        }
+    }
+
+    #[test]
     fn nothing_changed_in_the_judges_registers_skips() {
         let spans = extract(Path::new("README.md"), README, &[]);
-        let changed: HashSet<usize> = [99].into();
+        let changed = Changes::on_lines(&[99]);
         assert_eq!(
             prepare(
                 &judge(Scope::Whole, vec![Register::LongForm]),
                 &spans,
-                Some(&changed)
+                &changed
             ),
             Prepared::Skip
         );
         assert_eq!(
-            prepare(&judge(Scope::Diff, vec![Register::Comment]), &spans, None),
+            prepare(
+                &judge(Scope::Diff, vec![Register::Comment]),
+                &spans,
+                &Changes::all()
+            ),
             Prepared::Skip,
             "a comment-only judge never sees markdown"
         );
         assert_eq!(
-            prepare(&judge(Scope::Diff, vec![Register::Comment]), &spans, None).ready(),
+            prepare(
+                &judge(Scope::Diff, vec![Register::Comment]),
+                &spans,
+                &Changes::all()
+            )
+            .ready(),
             None
         );
     }
@@ -182,7 +209,7 @@ mod tests {
         let big = format!("{}\n", "word ".repeat(MAX_INPUT_CHARS / 4));
         let spans = extract(Path::new("big.md"), &big, &[]);
         assert!(matches!(
-            prepare(&judge(Scope::Diff, vec![Register::LongForm]), &spans, None),
+            prepare(&judge(Scope::Diff, vec![Register::LongForm]), &spans, &Changes::all()),
             Prepared::TooLarge(n) if n > MAX_INPUT_CHARS
         ));
     }
@@ -195,7 +222,7 @@ mod tests {
         let input = ready(prepare(
             &judge(Scope::Diff, vec![Register::Comment]),
             &[span],
-            None,
+            &Changes::all(),
         ));
         assert!(
             input

@@ -56,11 +56,9 @@ impl Sample {
         spans: &[ProseSpan],
         ruleset: &Ruleset,
     ) -> Self {
-        let span = spans
-            .iter()
-            .find(|s| (s.first_line()..=s.last_line()).contains(&finding.line));
+        let span = spans.get(finding.span);
         let judge = ruleset.judges.iter().find(|j| j.id == finding.rule_id);
-        let settings = &ruleset.judge_settings;
+        let settings = judge.map(|j| j.settings(&ruleset.judge_settings));
         Self {
             id: id.to_owned(),
             rule: finding.rule_id.clone(),
@@ -75,8 +73,8 @@ impl Sample {
             matched: finding.matched.clone(),
             message: finding.message.clone(),
             suggestion: finding.suggestion.clone(),
-            model: judge.map(|_| settings.model.clone()),
-            effort: judge.map(|_| settings.effort.clone()),
+            model: settings.as_ref().map(|s| s.model.clone()),
+            effort: settings.map(|s| s.effort),
             rubric_sha256: judge.map(|j| short_sha256(&j.rubric)),
             context: span.map_or_else(String::new, |s| cap(&s.raw)),
             code_context: span.and_then(|s| s.code_context.as_deref()).map(cap),

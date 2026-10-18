@@ -12,8 +12,15 @@ pub(crate) struct FakeClaude {
     pub path: PathBuf,
 }
 
-/// The CLI's success envelope around `findings`.
+/// The CLI's success envelope around `findings`; one without `violates` gets `true`, the shape a
+/// real judge sends for a violation.
 pub(crate) fn success(findings: &Value) -> String {
+    let mut findings = findings.clone();
+    for f in findings.as_array_mut().into_iter().flatten() {
+        if let Some(f) = f.as_object_mut() {
+            f.entry("violates").or_insert(Value::Bool(true));
+        }
+    }
     json!({
         "type": "result",
         "subtype": "success",

@@ -13,6 +13,9 @@ fn judge() -> Judge {
         scope: crate::ruleset::Scope::Diff,
         registers: vec![Register::LongForm],
         rubric: "Flag recap sentences.".into(),
+        excludes: crate::ruleset::Excludes::default(),
+        model: None,
+        effort: None,
     }
 }
 
@@ -62,6 +65,11 @@ fn sends_the_exact_contract() {
 fn schema_is_valid_json() {
     let schema: serde_json::Value = serde_json::from_str(SCHEMA).unwrap();
     assert_eq!(schema["required"], json!(["findings"]));
+    assert_eq!(
+        schema["properties"]["findings"]["items"]["required"],
+        json!(["quote", "explanation", "violates"])
+    );
+    assert!(system_prompt(&judge()).contains("`violates` is true"));
 }
 
 #[test]
@@ -78,11 +86,13 @@ fn reads_structured_output() {
                 quote: "In conclusion, it works.".into(),
                 explanation: "A recap.".into(),
                 suggestion: Some("Cut it.".into()),
+                violates: true,
             },
             RawFinding {
                 quote: "Also this.".into(),
                 explanation: "Another.".into(),
                 suggestion: None,
+                violates: true,
             },
         ]
     );
@@ -92,12 +102,24 @@ fn reads_structured_output() {
 fn falls_back_to_the_result_string() {
     let out = json!({
         "is_error": false,
-        "result": "{\"findings\":[{\"quote\":\"q\",\"explanation\":\"e\"}]}"
+        "result": "{\"findings\":[{\"quote\":\"q\",\"explanation\":\"e\",\"violates\":true}]}"
     })
     .to_string();
     let fake = FakeClaude::new(&out, 0, 0.0);
     let verdict = call(&settings(&fake, 10), &judge(), "x").unwrap();
     assert_eq!(verdict.findings[0].quote, "q");
+}
+
+#[test]
+fn a_finding_without_the_violates_flag_is_unparseable() {
+    let out = json!({
+        "is_error": false,
+        "structured_output": {"findings": [{"quote": "q", "explanation": "e"}]}
+    })
+    .to_string();
+    let fake = FakeClaude::new(&out, 0, 0.0);
+    let failure = call(&settings(&fake, 10), &judge(), "x").unwrap_err();
+    assert!(matches!(failure, Failure::Unparseable(_)), "{failure:?}");
 }
 
 #[test]

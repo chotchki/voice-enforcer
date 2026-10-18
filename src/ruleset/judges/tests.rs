@@ -49,6 +49,9 @@ fn inline_judge_parses() {
             scope: Scope::Diff,
             registers: vec![Register::LongForm, Register::Comment],
             rubric: "Flag a sentence that restates a point already made.".into(),
+            excludes: crate::ruleset::Excludes::default(),
+            model: None,
+            effort: None,
         }]
     );
     assert!(rs.judges[0].applies_to(Register::Comment));
@@ -209,4 +212,58 @@ fn absolute_rubric_file_is_allowed() {
         file.display()
     ));
     assert_eq!(rs.judges[0].rubric, "Absolute.");
+}
+
+#[test]
+fn judge_overrides_parse_and_merge() {
+    let rs = ok(&format!(
+        "{JUDGE}model = \"sonnet\"\neffort = \"high\"\nexclude = [\"~/notes/**\"]\n"
+    ));
+    let judge = &rs.judges[0];
+    assert_eq!(judge.model.as_deref(), Some("sonnet"));
+    assert_eq!(judge.effort.as_deref(), Some("high"));
+    assert!(
+        judge
+            .excludes
+            .is_match(Path::new("/home/tester/notes/a.md"))
+    );
+    assert!(
+        !judge
+            .excludes
+            .is_match(Path::new("/home/tester/other/a.md"))
+    );
+    let merged = judge.settings(&rs.judge_settings);
+    assert_eq!(
+        (merged.model.as_str(), merged.effort.as_str()),
+        ("sonnet", "high")
+    );
+    assert_eq!(merged.command, "claude");
+
+    let plain = ok(JUDGE);
+    assert_eq!(
+        plain.judges[0].settings(&plain.judge_settings),
+        JudgeSettings::default()
+    );
+}
+
+#[test]
+fn bad_judge_overrides_name_the_judge_and_line() {
+    for (body, needle) in [
+        (
+            "effort = \"extreme\"",
+            "judge `no-recap`: unknown `effort` `extreme`",
+        ),
+        (
+            "model = \"\"",
+            "judge `no-recap`: `model` must not be empty",
+        ),
+        (
+            "exclude = [\"a/[\"]",
+            "judge `no-recap`: invalid glob `a/[` in `exclude`",
+        ),
+    ] {
+        let e = err(&format!("{JUDGE}{body}\n"));
+        assert!(e.message.contains(needle), "{body}: {e}");
+        assert_eq!(e.line, Some(10), "{body}: {e}");
+    }
 }

@@ -129,14 +129,35 @@ fn ambiguous_basename_is_unresolved() {
     );
     assert_eq!(
         summary(&got),
-        vec![(Severity::Warn, "notes.md".into(), None)]
+        vec![(
+            Severity::Warn,
+            "notes.md".into(),
+            Some("name it by its path".into())
+        )]
     );
+    assert_eq!(
+        got[0].message,
+        "named file `notes.md` matches 2 files, so it can't be linked"
+    );
+}
+
+#[test]
+fn existing_directories_are_left_alone() {
+    let dir = repo(&[
+        "tools/sdk-1.4/README.md",
+        "out/Viewer.app/Info.plist",
+        "docs/x.md",
+    ]);
+    let src = "Use `tools/sdk-1.4/` and `out/Viewer.app` and `sdk-1.4`.\n";
+    assert_eq!(check_md(dir.path(), "README.md", src), vec![]);
+    let nested = "See `../tools/sdk-1.4` here.\n";
+    assert_eq!(check_md(dir.path(), "docs/x.md", nested), vec![]);
 }
 
 #[test]
 fn broken_relative_link_is_a_warn() {
     let dir = repo(&["docs/real.md"]);
-    let src = "See [setup](docs/setup.md), [real](docs/real.md#intro), [web](https://x.io/a.md), [top](#top), [abs](/etc/hosts), [mail](mailto:a@b.c).\n";
+    let src = "See [setup](docs/setup.md), [real](docs/real.md#intro), [web](https://x.io/a.md), [top](#top), [abs](/etc/hosts), [mail](mailto:a@b.c), <a@b.c>.\n";
     let got = check_md(dir.path(), "README.md", src);
     assert_eq!(got.len(), 1);
     assert_eq!(got[0].severity, Severity::Warn);

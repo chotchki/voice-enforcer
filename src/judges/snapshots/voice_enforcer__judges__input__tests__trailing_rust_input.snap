@@ -1,0 +1,10 @@
+---
+source: src/judges/input.rs
+expression: input.text
+---
+=== span 1 · line 2 · comment (line) · CHANGED ===
+retries
+--- code context (not judged) ---
+    let n = 3;
+    go(n);
+}
