@@ -2,7 +2,7 @@
 
 ## AC. Disputes: misfires leave evidence the ruleset owner can use
 
-- [ ] AC.0 Phase exit: every box ticked, every ci.yml job green on the landing commit (the 99% coverage gate included), docs/design.md and README.md updated. The combined soak with aa's AA.19 follows this phase
+- [x] AC.0 Phase exit: every box ticked, every ci.yml job green on the landing commit (the 99% coverage gate included), docs/design.md and README.md updated. The combined soak with aa's AA.19 follows this phase
 - [x] AC.1 Shared helpers: move `utc_stamp` out of `setup` into a `clock` module beside a new RFC 3339 formatter, and split the shell quoting out of `install`'s command builder into a shared helper. Their existing tests move with them, plus RFC 3339 cases (epoch, a leap day, before the epoch)
 - [x] AC.2 Finding ids and the hint: the 8-hex id from SHA-256 over session, absolute path, rule or judge id and matched text; `(id …)` on every listed finding; the one-line dispute hint (shell-quoted absolute binary path, says the result is unchanged) closing any listing with findings. Snapshot updates, plus tests for an id staying put when a retry moves the text to another line and for no hint on a notes-only listing
 - [x] AC.3 Samples: save one per listed finding under `$XDG_STATE_HOME/voice-enforcer/findings/<id>.json` (temp-then-rename) with the span around the finding's line and its code context capped at 4,000 characters, `kind` from the ruleset's judge ids and the model, effort and rubric hash for judges; prune samples untouched for 7 days alongside the guard. Tests cover a rule sample, a judge sample, the context cap, an unwritable state dir leaving the decision unchanged and pruning
