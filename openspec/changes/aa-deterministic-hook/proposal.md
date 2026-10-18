@@ -25,7 +25,7 @@ A voice profile only works while it's in the context window, and a long session 
 
 - `hook-intake`: the PreToolUse contract - which tools it handles, how the post-tool text is rebuilt, the diff scoping, the deny / context / pass decision, fail-open behavior and the loop guard
 - `prose-extraction`: which files yield prose, the long-form vs comment registers, comment level classification and what gets skipped (code blocks, generated files, directives)
-- `deterministic-rules`: the rule kinds, their matching semantics, severity and register scoping, and the finding format
+- `deterministic-rules`: the rule kinds, their matching semantics, severity and register scoping plus the finding format
 - `ruleset-config`: where the ruleset is found, its versioned TOML format, validation and path excludes
 - `cli`: the `check`, `validate`, `init`, `install` and `uninstall` verbs and their exit codes
 
@@ -36,7 +36,7 @@ None (specs start empty with this change).
 ## Non-goals
 
 - Haiku judges, the verdict cache, the recursion guard and dispute samples: change ab.
-- The `gh` wrapper, commit and PR bodies, and file ownership (whose file is this, do I restyle it): change ac. Until then a path exclude in the ruleset is the manual answer for repos that aren't mine to restyle.
+- The `gh` wrapper, commit and PR bodies and file ownership (whose file is this, do I restyle it): change ac. Until then a path exclude in the ruleset is the manual answer for repos that aren't mine to restyle.
 - docx / odt: change ad, once we know how those writes can be intercepted (Claude usually builds them through Bash, which a Write/Edit matcher never sees).
 - NotebookEdit and more tree-sitter languages: backlog.
 

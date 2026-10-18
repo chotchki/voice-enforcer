@@ -42,7 +42,7 @@ Findings count only when they touch a line that's added or changed versus the on
 
 - Whole-file evaluation was rejected: it blocks on tells Claude didn't write and loops forever on legacy files.
 - Diffing findings as a multiset (before vs after) was rejected: it can't tell WHICH of two identical occurrences is new.
-- The rule is "you touched the line, it's yours." Cheap, easy to explain, and the cost is boy-scouting: rewriting one word on a line with an old tell means fixing the tell too (acceptable, arguably a feature).
+- The rule is "you touched the line, it's yours." Cheap and easy to explain; the cost is boy-scouting: rewriting one word on a line with an old tell means fixing the tell too (acceptable, arguably a feature).
 - Change ab adds whole-file judges (repetition) on purpose; scope becomes a per-source property then, not a global one.
 
 ### Rules are a typed enum

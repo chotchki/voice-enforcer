@@ -58,8 +58,9 @@ pub(super) fn serial_commas(text: &str, max_item_words: usize) -> Vec<Range<usiz
         for m in SERIAL.find_iter(s) {
             let before = &s[..m.start()];
             let clause = before
-                .rfind([';', ':', '(', ')', '\u{2014}', '\u{2013}'])
-                .map_or(before, |i| &before[i + 1..]);
+                .rsplit([';', ':', '(', ')', '\u{2014}', '\u{2013}'])
+                .next()
+                .unwrap_or(before);
             let items: Vec<&str> = clause.split(',').map(str::trim).collect();
             if is_list(&items, max_item_words) {
                 let comma = range.start + m.start();
@@ -103,6 +104,9 @@ mod tests {
             ("red, a very long item with far too many words, and blue", 0),
             (", , and nothing", 0),
             ("red, green, and blue. Cats, dogs, or birds.", 2),
+            ("The plan\u{2014}red, green, and blue\u{2014}held.", 1),
+            ("one \u{2013} two, and three", 0),
+            ("Caf\u{e9}s, bars, and clubs", 1),
         ];
         for (text, want) in cases {
             assert_eq!(serial_commas(text, 4).len(), *want, "{text:?}");
