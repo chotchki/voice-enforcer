@@ -412,3 +412,55 @@ fn python_header_comment_and_blank_line() {
         ]
     );
 }
+
+#[test]
+fn raw_text_keeps_backtick_code() {
+    let spans = extract(
+        Lang::Rust,
+        "// call `leverage()` then stop\nfn f() {}\n",
+        &[],
+    );
+    assert_eq!(spans[0].raw, "call `leverage()` then stop");
+    assert_eq!(spans[0].raw_line_at(0), 1);
+}
+
+#[test]
+fn comments_carry_the_code_after_them() {
+    let src = "fn f() {\n    // increment the counter\n    count += 1;\n}\n";
+    let spans = extract(Lang::Rust, src, &[]);
+    assert_eq!(spans[0].code_context.as_deref(), Some("    count += 1;\n}"));
+}
+
+#[test]
+fn code_context_stops_at_twenty_lines_and_file_end() {
+    let body = (0..30)
+        .map(|i| format!("let x{i} = {i};"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let src = format!("// header comment\n{body}");
+    let spans = extract(Lang::Rust, &src, &[]);
+    let context = spans[0].code_context.as_deref().unwrap();
+    assert_eq!(context.lines().count(), 20);
+    assert!(context.starts_with("let x0 = 0;"));
+
+    let spans = extract(
+        Lang::Rust,
+        "fn f() {}\n// trailing note at the end\n\n\n",
+        &[],
+    );
+    assert_eq!(spans[0].code_context, None);
+}
+
+#[test]
+fn block_comment_context_starts_after_its_closing_line() {
+    let src = "/*\n * Explains it.\n */\nfn f() {}\n";
+    let spans = extract(Lang::Rust, src, &[]);
+    assert_eq!(spans[0].code_context.as_deref(), Some("fn f() {}"));
+}
+
+#[test]
+fn docstrings_carry_the_body_after_them() {
+    let src = "def f():\n    \"\"\"Return one.\"\"\"\n    return 1\n";
+    let spans = extract(Lang::Python, src, &[]);
+    assert_eq!(spans[0].code_context.as_deref(), Some("    return 1"));
+}

@@ -9,11 +9,14 @@ pub struct Env {
     pub cwd: PathBuf,
     pub xdg_config_home: Option<PathBuf>,
     pub xdg_state_home: Option<PathBuf>,
+    pub xdg_cache_home: Option<PathBuf>,
     /// `VOICE_ENFORCER_RULESET`
     pub ruleset_dir: Option<PathBuf>,
     pub now: SystemTime,
     /// The running binary, used by `install` to write an absolute hook command.
     pub exe: PathBuf,
+    /// `VOICE_ENFORCER_JUDGE` is set: this process was started by a judge call.
+    pub judge_child: bool,
 }
 
 impl Env {
@@ -41,9 +44,11 @@ impl Env {
             home,
             xdg_config_home: path_var("XDG_CONFIG_HOME"),
             xdg_state_home: path_var("XDG_STATE_HOME"),
+            xdg_cache_home: path_var("XDG_CACHE_HOME"),
             ruleset_dir: path_var("VOICE_ENFORCER_RULESET"),
             now,
             exe: exe.unwrap_or_else(|| PathBuf::from("voice-enforcer")),
+            judge_child: var("VOICE_ENFORCER_JUDGE").is_some_and(|v| !v.is_empty()),
         }
     }
 
@@ -51,6 +56,13 @@ impl Env {
         self.xdg_config_home
             .clone()
             .unwrap_or_else(|| self.home.join(".config"))
+            .join("voice-enforcer")
+    }
+
+    pub fn cache_dir(&self) -> PathBuf {
+        self.xdg_cache_home
+            .clone()
+            .unwrap_or_else(|| self.home.join(".cache"))
             .join("voice-enforcer")
     }
 
@@ -86,6 +98,7 @@ mod tests {
         assert_eq!(env.cwd, PathBuf::from("/"));
         assert_eq!(env.exe, PathBuf::from("voice-enforcer"));
         assert_eq!(env.xdg_state_home, None, "empty vars count as unset");
+        assert!(!env.judge_child);
     }
 
     #[test]
@@ -104,6 +117,7 @@ mod tests {
         assert_eq!(env.xdg_config_home, Some(PathBuf::from("/XDG_CONFIG_HOME")));
         assert_eq!(env.cwd, PathBuf::from("/c"));
         assert_eq!(env.exe, PathBuf::from("/e"));
+        assert!(env.judge_child);
     }
 
     #[test]
@@ -117,6 +131,10 @@ mod tests {
             PathBuf::from("/h/.local/state/voice-enforcer")
         );
         assert_eq!(env.config_dir(), PathBuf::from("/h/.config/voice-enforcer"));
+        env.xdg_cache_home = None;
+        assert_eq!(env.cache_dir(), PathBuf::from("/h/.cache/voice-enforcer"));
+        env.xdg_cache_home = Some(PathBuf::from("/z"));
+        assert_eq!(env.cache_dir(), PathBuf::from("/z/voice-enforcer"));
         env.xdg_state_home = Some(PathBuf::from("/x"));
         env.xdg_config_home = Some(PathBuf::from("/y"));
         assert_eq!(env.state_dir(), PathBuf::from("/x/voice-enforcer"));

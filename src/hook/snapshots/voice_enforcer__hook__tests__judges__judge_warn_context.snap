@@ -1,0 +1,7 @@
+---
+source: src/hook/tests.rs
+expression: out.context()
+---
+voice-enforcer warnings for README.md (the write went through):
+- [warn] no-very at README.md:1: "very" - Intensifier
+- [warn] recap at README.md:1: "In conclusion, it is fast." - Restates the point. (suggestion: Cut it.)

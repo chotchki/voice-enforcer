@@ -27,9 +27,11 @@ fn env() -> Env {
         cwd: PathBuf::from("/work"),
         xdg_config_home: None,
         xdg_state_home: None,
+        xdg_cache_home: None,
         ruleset_dir: None,
         now: SystemTime::UNIX_EPOCH,
         exe: PathBuf::from("/bin/voice-enforcer"),
+        judge_child: false,
     }
 }
 

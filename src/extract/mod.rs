@@ -62,12 +62,23 @@ pub struct ProseSpan {
     /// `(text offset, 1-based source line)` at each point the source line changes.
     segments: Vec<(usize, usize)>,
     pub annotations: Vec<Annotation>,
+    /// The same prose unmasked (inline code, URLs and HTML as written), for judges.
+    pub raw: String,
+    raw_segments: Vec<(usize, usize)>,
+    /// For a comment: up to 20 source lines after the block, so a judge can see what it describes.
+    pub code_context: Option<String>,
 }
 
 impl ProseSpan {
     pub fn line_at(&self, offset: usize) -> usize {
         let i = self.segments.partition_point(|&(o, _)| o <= offset);
         self.segments[i.saturating_sub(1)].1
+    }
+
+    /// 1-based line of byte `offset` in `raw`.
+    pub fn raw_line_at(&self, offset: usize) -> usize {
+        let i = self.raw_segments.partition_point(|&(o, _)| o <= offset);
+        self.raw_segments[i.saturating_sub(1)].1
     }
 
     pub fn first_line(&self) -> usize {
@@ -108,6 +119,9 @@ impl SpanBuilder {
                 text: String::new(),
                 segments: Vec::new(),
                 annotations: Vec::new(),
+                raw: String::new(),
+                raw_segments: Vec::new(),
+                code_context: None,
             },
         }
     }
@@ -120,19 +134,25 @@ impl SpanBuilder {
         if self.span.segments.last().map(|s| s.1) != Some(line) {
             self.span.segments.push((self.span.text.len(), line));
         }
+        if self.span.raw_segments.last().map(|s| s.1) != Some(line) {
+            self.span.raw_segments.push((self.span.raw.len(), line));
+        }
     }
 
     pub(crate) fn push(&mut self, s: &str, line: usize) {
         if !s.is_empty() {
             self.mark(line);
             self.span.text.push_str(s);
+            self.span.raw.push_str(s);
         }
     }
 
-    pub(crate) fn push_mask(&mut self, line: usize) -> Range<usize> {
+    /// Masks `original` in the text rules read; the raw text keeps it.
+    pub(crate) fn push_mask(&mut self, original: &str, line: usize) -> Range<usize> {
         self.mark(line);
         let start = self.span.text.len();
         self.span.text.push(MASK);
+        self.span.raw.push_str(original);
         start..self.span.text.len()
     }
 
@@ -141,10 +161,14 @@ impl SpanBuilder {
         let mut last = 0;
         for m in URL.find_iter(s) {
             self.push(&s[last..m.start()], line);
-            self.push_mask(line);
+            self.push_mask(m.as_str(), line);
             last = m.end();
         }
         self.push(&s[last..], line);
+    }
+
+    pub(crate) fn set_code_context(&mut self, context: Option<String>) {
+        self.span.code_context = context;
     }
 
     pub(crate) fn annotate(&mut self, annotation: Annotation) {
@@ -238,6 +262,9 @@ mod tests {
         b.push("next", 4);
         let span = b.finish().unwrap();
         assert_eq!(span.text, format!("see {MASK} now next"));
+        assert_eq!(span.raw, "see https://example.com/a.md now next");
+        assert_eq!(span.raw_line_at(0), 3);
+        assert_eq!(span.raw_line_at(span.raw.find("next").unwrap()), 4);
         assert_eq!(span.first_line(), 3);
         assert_eq!(span.last_line(), 4);
         assert_eq!(span.line_at(0), 3);

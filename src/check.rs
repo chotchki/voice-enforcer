@@ -9,7 +9,7 @@ use crate::env::Env;
 use crate::rules::Finding;
 use crate::ruleset::{self, Ruleset};
 use crate::types::Severity;
-use crate::{extract, pipeline};
+use crate::{extract, judges, pipeline};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub(crate) enum Format {
@@ -22,6 +22,7 @@ pub(crate) fn check(
     paths: &[PathBuf],
     ruleset_flag: Option<&Path>,
     format: Format,
+    with_judges: bool,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
     env: &Env,
@@ -47,6 +48,7 @@ pub(crate) fn check(
         }
     }
 
+    let cache = judges::Cache::new(&env.cache_dir(), env.now);
     let mut results: Vec<(String, Finding)> = Vec::new();
     for file in files {
         if extract::kind_for(&file).is_none() {
@@ -60,11 +62,16 @@ pub(crate) fn check(
             .unwrap_or(&file)
             .display()
             .to_string();
-        results.extend(
-            pipeline::findings(&ruleset, &file, &text)
-                .into_iter()
-                .map(|f| (shown.clone(), f)),
-        );
+        let evaluated = pipeline::evaluate(&ruleset, &file, &text);
+        let mut found = evaluated.findings;
+        if with_judges && !found.iter().any(|f| f.severity == Severity::Block) {
+            let outcome = judges::run(&ruleset, &evaluated.spans, None, &cache);
+            found.extend(outcome.findings);
+            for note in outcome.notes {
+                let _ = writeln!(stderr, "voice-enforcer: {shown}: {note}");
+            }
+        }
+        results.extend(found.into_iter().map(|f| (shown.clone(), f)));
     }
 
     match format {
@@ -113,9 +120,10 @@ pub(crate) fn validate(
             let path = ruleset::locate(ruleset_flag, env);
             let _ = writeln!(
                 stdout,
-                "{}: valid, {} rule(s)",
+                "{}: valid, {} rule(s), {} judge(s)",
                 path.display(),
-                rs.rules.len()
+                rs.rules.len(),
+                rs.judges.len()
             );
             0
         }

@@ -35,6 +35,13 @@ mod tests {
     }
 
     #[test]
+    fn raw_keeps_urls() {
+        let spans = extract("see https://x.io/a\nnext\n");
+        assert_eq!(spans[0].raw, "see https://x.io/a\nnext");
+        assert_eq!(spans[0].raw_line_at(spans[0].raw.find("next").unwrap()), 2);
+    }
+
+    #[test]
     fn empty_input() {
         assert_eq!(extract(""), []);
         assert_eq!(extract("\n  \n"), []);

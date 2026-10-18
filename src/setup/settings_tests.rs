@@ -26,9 +26,11 @@ impl Fixture {
             cwd: dir.path().to_path_buf(),
             xdg_config_home: None,
             xdg_state_home: None,
+            xdg_cache_home: None,
             ruleset_dir: None,
             now: SystemTime::UNIX_EPOCH + Duration::from_secs(NOW),
             exe: bin.join("voice-enforcer"),
+            judge_child: false,
         };
         Self { dir, env }
     }
@@ -129,7 +131,7 @@ fn install_keeps_existing_settings_and_backs_up() {
         pre[1],
         json!({
             "matcher": "Write|Edit|MultiEdit",
-            "hooks": [{"type": "command", "command": fx.our_command(), "timeout": 30}]
+            "hooks": [{"type": "command", "command": fx.our_command(), "timeout": 120}]
         })
     );
 
@@ -403,4 +405,20 @@ fn failed_rename_cleans_up_its_temp_file() {
         .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
         .collect();
     assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[test]
+fn install_upgrades_an_old_timeout_in_place() {
+    let fx = Fixture::new();
+    let cmd = fx.our_command();
+    fx.seed(&json!({"hooks": {"PreToolUse": [
+        {"matcher": "Write|Edit|MultiEdit", "hooks": [
+            {"type": "command", "command": cmd, "timeout": 30}
+        ]}
+    ]}}));
+    let out = fx.run(&["install"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let got = fx.read();
+    assert_eq!(ours_count(&got), 1);
+    assert_eq!(got["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"], 120);
 }

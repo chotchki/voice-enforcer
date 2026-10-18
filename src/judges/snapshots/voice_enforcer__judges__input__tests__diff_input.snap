@@ -1,0 +1,6 @@
+---
+source: src/judges/input.rs
+expression: input.text
+---
+=== span 1 · lines 5-6 · long_form · CHANGED ===
+Second paragraph `changed` here and wraps.

@@ -140,6 +140,9 @@ static BUILTIN_DIRECTIVES: LazyLock<Regex> = LazyLock::new(|| {
     .expect("valid directive regex")
 });
 
+/// How much code after a comment a judge gets to see.
+const CONTEXT_LINES: usize = 20;
+
 static BACKTICK_CODE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"`[^`\n]+`").expect("valid backtick regex"));
 
@@ -149,6 +152,9 @@ enum Style {
     OuterDoc,
     InnerDoc,
 }
+
+/// A docstring's `(row, text)` lines, its level and the row its string literal ends on.
+type Docstring = (Vec<(usize, String)>, Level, usize);
 
 /// One comment node, already stripped of its markers.
 struct Piece<'t> {
@@ -206,18 +212,22 @@ pub(super) fn extract(lang: Lang, src: &str, directives: &[Regex]) -> Vec<ProseS
     }
 
     let first_code = first_code_byte(root);
+    let src_lines: Vec<&str> = src.lines().collect();
     let mut out: Vec<ProseSpan> = blocks
         .iter()
         .filter(|b| !is_license(b))
         .filter_map(|b| {
             let level = classify(lang, b, first_code);
-            build(b.iter().flat_map(|p| p.lines.iter()), level)
+            let context = code_context(&src_lines, b[b.len() - 1].end_row());
+            build(b.iter().flat_map(|p| p.lines.iter()), level, context)
         })
         .collect();
     out.extend(
         docstrings
             .into_iter()
-            .filter_map(|(lines, level)| build(lines.iter(), level)),
+            .filter_map(|(lines, level, end_row)| {
+                build(lines.iter(), level, code_context(&src_lines, end_row))
+            }),
     );
     out.sort_by_key(ProseSpan::first_line);
     out
@@ -228,7 +238,7 @@ fn collect<'t>(
     node: Node<'t>,
     src: &str,
     pieces: &mut Vec<Piece<'t>>,
-    docstrings: &mut Vec<(Vec<(usize, String)>, Level)>,
+    docstrings: &mut Vec<Docstring>,
 ) {
     if Lang::is_comment(node.kind()) {
         pieces.push(piece(lang, node, src));
@@ -237,7 +247,11 @@ fn collect<'t>(
     if lang == Lang::Python
         && let Some((string, level)) = python_docstring(node)
     {
-        docstrings.push((docstring_lines(string, src), level));
+        docstrings.push((
+            docstring_lines(string, src),
+            level,
+            string.end_position().row,
+        ));
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -428,8 +442,27 @@ fn docstring_lines(string: Node, src: &str) -> Vec<(usize, String)> {
     trim_blank_ends(lines)
 }
 
-fn build<'a>(lines: impl Iterator<Item = &'a (usize, String)>, level: Level) -> Option<ProseSpan> {
+/// Up to [`CONTEXT_LINES`] source lines after row `end_row`, or `None` when nothing but blank
+/// lines follow.
+fn code_context(src_lines: &[&str], end_row: usize) -> Option<String> {
+    let after = src_lines
+        .iter()
+        .skip(end_row + 1)
+        .take(CONTEXT_LINES)
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let after = after.trim_end();
+    (!after.trim().is_empty()).then(|| after.to_owned())
+}
+
+fn build<'a>(
+    lines: impl Iterator<Item = &'a (usize, String)>,
+    level: Level,
+    context: Option<String>,
+) -> Option<ProseSpan> {
     let mut b = SpanBuilder::new(Register::Comment, Some(level));
+    b.set_code_context(context);
     for (row, text) in lines {
         let line = row + 1;
         if b.len() > 0 {
@@ -438,7 +471,7 @@ fn build<'a>(lines: impl Iterator<Item = &'a (usize, String)>, level: Level) -> 
         let mut last = 0;
         for m in BACKTICK_CODE.find_iter(text) {
             b.push_prose(&text[last..m.start()], line);
-            let range = b.push_mask(line);
+            let range = b.push_mask(m.as_str(), line);
             b.annotate(Annotation::InlineCode {
                 range,
                 content: text[m.start() + 1..m.end() - 1].to_owned(),

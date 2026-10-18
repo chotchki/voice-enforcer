@@ -68,3 +68,39 @@ id = "link-named-files"
 kind = "file_links"
 severity = "warn"
 message = "Named file isn't linked"
+
+# LLM judges: one Haiku call each, run only when nothing above blocks and the write changed prose
+# the judge reads. These are the defaults; delete the table to keep them.
+[judges]
+model = "haiku"
+effort = "medium"
+command = "claude"
+timeout_secs = 45
+
+# A closer that summarizes instead of adding anything. A phrase list catches "in conclusion" but
+# not the same point said twice in new words, which is where a judge earns its call.
+[[judge]]
+id = "recap-closer"
+severity = "warn"
+scope = "diff"
+registers = ["long_form"]
+rubric = """
+Flag a sentence whose only job is to restate or summarize what the text around it already said:
+a wrap-up opener ("to sum up", "all in all") or the same point repeated in different words.
+A sentence that adds a new fact, number, consequence or next step is fine, even at the end of a
+section.
+"""
+
+# A comment that narrates the code under it. Comments that say why, name a constraint or point at
+# a non-obvious consequence are the ones worth keeping.
+[[judge]]
+id = "comment-restates-code"
+severity = "warn"
+scope = "diff"
+registers = ["comment"]
+rubric = """
+Flag a comment that only restates what the code right after it plainly does (for example
+"increment the counter" above `count += 1`). Use the code context that follows each comment to
+decide. A comment that explains why, records a constraint, warns about a consequence or links a
+reference is fine.
+"""

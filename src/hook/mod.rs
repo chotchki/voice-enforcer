@@ -15,7 +15,7 @@ use similar::{DiffTag, TextDiff};
 use crate::env::Env;
 use crate::rules::Finding;
 use crate::types::Severity;
-use crate::{pipeline, ruleset};
+use crate::{judges, pipeline, ruleset};
 use guard::{Guard, Verdict};
 use rebuild::{EditInput, MultiEditInput, Rebuilt, WriteInput};
 
@@ -41,6 +41,9 @@ pub(crate) fn run(
     stderr: &mut dyn Write,
     env: &Env,
 ) -> u8 {
+    if env.judge_child {
+        return 0;
+    }
     let mut input = String::new();
     let decided = stdin
         .read_to_string(&mut input)
@@ -111,14 +114,21 @@ fn decide(input: &str, env: &Env) -> Result<Option<Response>, String> {
     };
 
     let changed = changed_lines(before.as_deref(), &after);
-    let findings: Vec<Finding> = pipeline::findings(&ruleset, &path, &after)
-        .into_iter()
-        .filter(|f| {
-            changed
-                .as_ref()
-                .is_none_or(|c| (f.line..=f.end_line).any(|l| c.contains(&l)))
-        })
-        .collect();
+    let touched = |f: &Finding| {
+        changed
+            .as_ref()
+            .is_none_or(|c| (f.line..=f.end_line).any(|l| c.contains(&l)))
+    };
+    let evaluated = pipeline::evaluate(&ruleset, &path, &after);
+    let mut findings: Vec<Finding> = evaluated.findings.into_iter().filter(touched).collect();
+    let mut notes = Vec::new();
+    // Judges only see a draft that got past the deterministic rules; a block means a rewrite.
+    if !findings.iter().any(|f| f.severity == Severity::Block) {
+        let cache = judges::Cache::new(&env.cache_dir(), env.now);
+        let outcome = judges::run(&ruleset, &evaluated.spans, changed.as_ref(), &cache);
+        findings.extend(outcome.findings.into_iter().filter(touched));
+        notes = outcome.notes;
+    }
 
     let state = env.state_dir();
     guard::prune(&state, env.now);
@@ -133,11 +143,13 @@ fn decide(input: &str, env: &Env) -> Result<Option<Response>, String> {
 
     if blocks == 0 {
         guard.on_clean();
-        if findings.is_empty() {
+        if findings.is_empty() && notes.is_empty() {
             return Ok(None);
         }
         let header = format!("voice-enforcer warnings for {shown} (the write went through):");
-        return Ok(Some(Response::Context(listing(&header, &findings, &shown))));
+        return Ok(Some(Response::Context(listing(
+            &header, &findings, &notes, &shown,
+        ))));
     }
     Ok(Some(match guard.on_block() {
         Verdict::Deny => Response::Deny(listing(
@@ -145,6 +157,7 @@ fn decide(input: &str, env: &Env) -> Result<Option<Response>, String> {
                 "voice-enforcer blocked this write to {shown}: {blocks} blocking and {warns} warning finding(s). Fix the blocking ones and retry."
             ),
             &findings,
+            &notes,
             &shown,
         )),
         Verdict::Tripped => Response::Context(listing(
@@ -153,6 +166,7 @@ fn decide(input: &str, env: &Env) -> Result<Option<Response>, String> {
                 ruleset.max_consecutive_blocks
             ),
             &findings,
+            &notes,
             &shown,
         )),
     }))
@@ -181,7 +195,7 @@ fn display_path(path: &Path, cwd: &Path) -> String {
     path.strip_prefix(cwd).unwrap_or(path).display().to_string()
 }
 
-fn listing(header: &str, findings: &[Finding], shown: &str) -> String {
+fn listing(header: &str, findings: &[Finding], notes: &[String], shown: &str) -> String {
     use std::fmt::Write as _;
     let mut sorted: Vec<&Finding> = findings.iter().collect();
     sorted.sort_by_key(|f| (f.severity, f.line));
@@ -195,6 +209,9 @@ fn listing(header: &str, findings: &[Finding], shown: &str) -> String {
         if let Some(s) = &f.suggestion {
             let _ = write!(out, " (suggestion: {s})");
         }
+    }
+    for note in notes {
+        let _ = write!(out, "\n- note: {note}");
     }
     out
 }

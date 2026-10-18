@@ -43,9 +43,11 @@ impl Fixture {
             cwd: root.join("work"),
             xdg_config_home: None,
             xdg_state_home: None,
+            xdg_cache_home: None,
             ruleset_dir: Some(root.join("rules")),
             now: SystemTime::now(),
             exe: PathBuf::from("/bin/voice-enforcer"),
+            judge_child: false,
         };
         Self { dir, env }
     }
@@ -206,4 +208,71 @@ fn validate_missing_or_invalid() {
     let out = fx.run(&["validate"]);
     assert_eq!(out.code, 2);
     assert!(out.stderr.contains("bogus"), "{}", out.stderr);
+}
+
+mod judges {
+    use super::*;
+    use crate::judges::fake::FakeClaude;
+    use serde_json::json;
+
+    fn rules(fake: &FakeClaude) -> String {
+        format!(
+            "{RULES}\n[judges]\ncommand = \"{}\"\ntimeout_secs = 10\n\n[[judge]]\nid = \"recap\"\nseverity = \"block\"\nscope = \"diff\"\nregisters = [\"long_form\"]\nrubric = \"r\"\n",
+            fake.command()
+        )
+    }
+
+    #[test]
+    fn judges_are_off_by_default() {
+        let fake =
+            FakeClaude::answering(&json!([{"quote": "To sum up, done.", "explanation": "Recap."}]));
+        let fx = Fixture::new(Some(&rules(&fake)));
+        fx.file("a.md", "Work happened. To sum up, done.\n");
+        let out = fx.run(&["check", "a.md"]);
+        assert_eq!((out.code, out.stdout.as_str()), (0, ""));
+        assert_eq!(fake.calls(), 0);
+    }
+
+    #[test]
+    fn opted_in_judges_run_once_per_file() {
+        let fake =
+            FakeClaude::answering(&json!([{"quote": "To sum up, done.", "explanation": "Recap."}]));
+        let fx = Fixture::new(Some(&rules(&fake)));
+        fx.file("a.md", "Work happened. To sum up, done.\n");
+        fx.file("b.md", "Other work. To sum up, done.\n");
+        fx.file("blocked.md", "We leverage it. To sum up, done.\n");
+        let out = fx.run(&["check", "--judges", "."]);
+        assert_eq!(out.code, 1);
+        assert!(
+            out.stdout
+                .contains("a.md:1: block recap: Recap. (\"To sum up, done.\")"),
+            "{}",
+            out.stdout
+        );
+        assert!(out.stdout.contains("b.md:1: block recap"), "{}", out.stdout);
+        assert!(
+            !out.stdout.contains("blocked.md:1: block recap"),
+            "{}",
+            out.stdout
+        );
+        assert_eq!(
+            fake.calls(),
+            2,
+            "blocked.md had a deterministic block, so no judge call"
+        );
+    }
+
+    #[test]
+    fn judge_notes_go_to_stderr() {
+        let fake = FakeClaude::new("garbage", 0, 0.0);
+        let fx = Fixture::new(Some(&rules(&fake)));
+        fx.file("a.md", "Work happened.\n");
+        let out = fx.run(&["check", "--judges", "a.md"]);
+        assert_eq!(out.code, 0);
+        assert!(
+            out.stderr.contains("voice-enforcer: a.md: judge `recap`"),
+            "{}",
+            out.stderr
+        );
+    }
 }

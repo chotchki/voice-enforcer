@@ -17,6 +17,9 @@ use toml::Spanned;
 use crate::env::Env;
 use crate::types::{Level, Register, Severity};
 
+mod judges;
+pub use judges::{Judge, JudgeSettings, Scope};
+
 pub const FILE_NAME: &str = "ruleset.toml";
 pub const SUPPORTED_VERSION: i64 = 1;
 const DEFAULT_MAX_CONSECUTIVE_BLOCKS: u32 = 3;
@@ -45,6 +48,8 @@ pub struct Ruleset {
     pub comment_directives: Vec<Regex>,
     pub max_consecutive_blocks: u32,
     pub rules: Vec<Rule>,
+    pub judge_settings: JudgeSettings,
+    pub judges: Vec<Judge>,
 }
 
 impl Ruleset {
@@ -165,6 +170,9 @@ struct RawRuleset {
     loop_guard: Option<RawLoopGuard>,
     #[serde(default)]
     rule: Vec<Spanned<RawRule>>,
+    judges: Option<judges::RawJudges>,
+    #[serde(default)]
+    judge: Vec<Spanned<judges::RawJudge>>,
 }
 
 #[derive(Deserialize)]
@@ -273,13 +281,93 @@ impl Cx<'_> {
             .into_iter()
             .map(|r| self.rule(r, &mut seen))
             .collect::<Result<_, _>>()?;
+        let judge_settings = self.judge_settings(raw.judges)?;
+        let judges = raw
+            .judge
+            .into_iter()
+            .map(|j| self.judge(j, &mut seen))
+            .collect::<Result<_, _>>()?;
 
         Ok(Ruleset {
             excludes,
             comment_directives,
             max_consecutive_blocks,
             rules,
+            judge_settings,
+            judges,
         })
+    }
+
+    /// A non-empty id not yet used by any rule or judge (they share one namespace on findings).
+    fn id(
+        &self,
+        raw: Option<&Spanned<String>>,
+        table_span: &Range<usize>,
+        what: &str,
+        seen: &mut HashSet<String>,
+    ) -> Result<String, LoadError> {
+        let id = raw
+            .filter(|id| !id.get_ref().trim().is_empty())
+            .ok_or_else(|| {
+                self.fail(Some(table_span.clone()), format!("{what} is missing `id`"))
+            })?;
+        if !seen.insert(id.get_ref().clone()) {
+            return Err(self.fail(
+                Some(id.span()),
+                format!(
+                    "duplicate {what} id `{}` (rules and judges share one set of ids)",
+                    id.get_ref()
+                ),
+            ));
+        }
+        Ok(id.get_ref().clone())
+    }
+
+    fn severity(
+        &self,
+        raw: Option<&Spanned<String>>,
+        table_span: &Range<usize>,
+        at: &dyn Fn(&str) -> String,
+    ) -> Result<Severity, LoadError> {
+        match raw.map(|s| (s.get_ref().as_str(), s)) {
+            Some(("block", _)) => Ok(Severity::Block),
+            Some(("warn", _)) => Ok(Severity::Warn),
+            Some((other, s)) => Err(self.fail(
+                Some(s.span()),
+                at(&format!(
+                    "unknown severity `{other}`; expected block or warn"
+                )),
+            )),
+            None => Err(self.fail(Some(table_span.clone()), at("missing `severity`"))),
+        }
+    }
+
+    fn registers(
+        &self,
+        raw: Option<&Spanned<Vec<Spanned<String>>>>,
+        default: Vec<Register>,
+        at: &dyn Fn(&str) -> String,
+    ) -> Result<Vec<Register>, LoadError> {
+        match raw {
+            None => Ok(default),
+            Some(list) if list.get_ref().is_empty() => {
+                Err(self.fail(Some(list.span()), at("`registers` must not be empty")))
+            }
+            Some(list) => list
+                .get_ref()
+                .iter()
+                .map(|r| match r.get_ref().as_str() {
+                    "long_form" => Ok(Register::LongForm),
+                    "comment" => Ok(Register::Comment),
+                    other => Err(self.fail(
+                        Some(r.span()),
+                        at(&format!(
+                            "unknown register `{other}`; expected long_form or comment"
+                        )),
+                    )),
+                })
+                .collect(),
+        }
     }
 
     fn regex(&self, pattern: &Spanned<String>, place: &str) -> Result<Regex, LoadError> {
@@ -296,37 +384,14 @@ impl Cx<'_> {
         let rule_span = raw.span();
         let raw = raw.into_inner();
 
-        let id = raw
-            .id
-            .as_ref()
-            .filter(|id| !id.get_ref().trim().is_empty())
-            .ok_or_else(|| self.fail(Some(rule_span.clone()), "rule is missing `id`"))?;
-        if !seen.insert(id.get_ref().clone()) {
-            return Err(self.fail(
-                Some(id.span()),
-                format!("duplicate rule id `{}`", id.get_ref()),
-            ));
-        }
-        let name = id.get_ref().clone();
+        let name = self.id(raw.id.as_ref(), &rule_span, "rule", seen)?;
         let at = |field: &str| format!("rule `{name}`: {field}");
 
         let kind = raw
             .kind
             .as_ref()
             .ok_or_else(|| self.fail(Some(rule_span.clone()), at("missing `kind`")))?;
-        let severity = match raw.severity.as_ref().map(|s| (s.get_ref().as_str(), s)) {
-            Some(("block", _)) => Severity::Block,
-            Some(("warn", _)) => Severity::Warn,
-            Some((other, s)) => {
-                return Err(self.fail(
-                    Some(s.span()),
-                    at(&format!(
-                        "unknown severity `{other}`; expected block or warn"
-                    )),
-                ));
-            }
-            None => return Err(self.fail(Some(rule_span), at("missing `severity`"))),
-        };
+        let severity = self.severity(raw.severity.as_ref(), &rule_span, &at)?;
         let message = raw
             .message
             .as_ref()
@@ -376,30 +441,12 @@ impl Cx<'_> {
             }
         }
 
-        let registers = match &raw.registers {
-            None => match kind.get_ref().as_str() {
-                "sentence_limit" => vec![Register::Comment],
-                "file_links" => vec![Register::LongForm],
-                _ => vec![Register::LongForm, Register::Comment],
-            },
-            Some(list) if list.get_ref().is_empty() => {
-                return Err(self.fail(Some(list.span()), at("`registers` must not be empty")));
-            }
-            Some(list) => list
-                .get_ref()
-                .iter()
-                .map(|r| match r.get_ref().as_str() {
-                    "long_form" => Ok(Register::LongForm),
-                    "comment" => Ok(Register::Comment),
-                    other => Err(self.fail(
-                        Some(r.span()),
-                        at(&format!(
-                            "unknown register `{other}`; expected long_form or comment"
-                        )),
-                    )),
-                })
-                .collect::<Result<_, _>>()?,
+        let default_registers = match kind.get_ref().as_str() {
+            "sentence_limit" => vec![Register::Comment],
+            "file_links" => vec![Register::LongForm],
+            _ => vec![Register::LongForm, Register::Comment],
         };
+        let registers = self.registers(raw.registers.as_ref(), default_registers, &at)?;
 
         let kind = match kind.get_ref().as_str() {
             "phrase" => {

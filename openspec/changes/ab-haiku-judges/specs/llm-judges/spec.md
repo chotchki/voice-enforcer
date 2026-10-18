@@ -80,7 +80,7 @@ Judge input SHALL use the unmasked text (inline code, URLs and inline HTML as wr
 
 ### Requirement: Findings only on changed lines
 
-A judge finding SHALL be reported only when its line is a changed line, for both scopes.
+A judge finding SHALL be reported only when one of its lines (the quote's first through last line) is a changed line, for both scopes, the same test the deterministic rules use.
 
 #### Scenario: Whole judge quotes old text
 - **WHEN** a whole judge quotes a sentence on a line the write didn't change

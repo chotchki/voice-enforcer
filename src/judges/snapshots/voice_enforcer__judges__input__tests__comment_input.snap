@@ -1,0 +1,9 @@
+---
+source: src/judges/input.rs
+expression: input.text
+---
+=== span 1 · line 2 · comment (line) · CHANGED ===
+increment the counter
+--- code context (not judged) ---
+    count += 1;
+}

@@ -63,7 +63,7 @@ pub(super) fn extract(src: &str) -> Vec<ProseSpan> {
             Event::Text(text) => builder(&mut cur).push_prose(&text, line),
             Event::Code(code) => {
                 let b = builder(&mut cur);
-                let range = b.push_mask(line);
+                let range = b.push_mask(&format!("`{code}`"), line);
                 b.annotate(Annotation::InlineCode {
                     range,
                     content: code.into_string(),
@@ -74,7 +74,7 @@ pub(super) fn extract(src: &str) -> Vec<ProseSpan> {
             | Event::FootnoteReference(_)
             | Event::InlineMath(_)
             | Event::DisplayMath(_) => {
-                builder(&mut cur).push_mask(line);
+                builder(&mut cur).push_mask(&src[range], line);
             }
             Event::SoftBreak | Event::HardBreak => builder(&mut cur).push(" ", line),
             _ => {}
@@ -237,6 +237,23 @@ mod tests {
             texts("A **bold** and _soft_ ~~gone~~ word.\n"),
             vec!["A bold and soft gone word."]
         );
+    }
+
+    #[test]
+    fn raw_text_keeps_what_was_masked() {
+        let spans = extract("Run `cargo test` at https://x.io/a <br> now[^n].\n\n[^n]: note\n");
+        assert_eq!(
+            spans[0].raw,
+            "Run `cargo test` at https://x.io/a <br> now[^n]."
+        );
+        assert_eq!(spans[0].code_context, None);
+    }
+
+    #[test]
+    fn raw_line_mapping_follows_wrapping() {
+        let spans = extract("First `a` line\nsecond line.\n");
+        let span = &spans[0];
+        assert_eq!(span.raw_line_at(span.raw.find("second").unwrap()), 2);
     }
 
     #[test]

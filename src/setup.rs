@@ -13,7 +13,9 @@ use crate::env::Env;
 use crate::ruleset;
 
 const MATCHER: &str = "Write|Edit|MultiEdit";
-const TIMEOUT_SECS: u64 = 30;
+/// Room for judge calls (each capped at `judges.timeout_secs`, 45s by default) before Claude Code
+/// gives up on the hook.
+const TIMEOUT_SECS: u64 = 120;
 
 static OURS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"voice-enforcer['"]?\s+hook$"#).expect("valid command regex"));
@@ -279,9 +281,11 @@ mod tests {
             cwd: root.to_path_buf(),
             xdg_config_home: Some(root.join("config")),
             xdg_state_home: None,
+            xdg_cache_home: None,
             ruleset_dir: None,
             now: SystemTime::now(),
             exe: PathBuf::from("/bin/voice-enforcer"),
+            judge_child: false,
         }
     }
 
@@ -294,6 +298,12 @@ mod tests {
             .map(|r| std::mem::discriminant(&r.kind))
             .collect();
         assert_eq!(kinds.len(), 5);
+        assert_eq!(rs.judges.len(), 2);
+        assert!(
+            rs.judges
+                .iter()
+                .all(|j| j.severity == crate::types::Severity::Warn)
+        );
     }
 
     #[test]

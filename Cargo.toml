@@ -18,6 +18,7 @@ pulldown-cmark = { version = "0.13.4", default-features = false }
 regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
+sha2 = "0.11.1"
 similar = "3.2.0"
 toml = "1.1.8"
 tree-sitter = "0.27.1"
@@ -27,6 +28,7 @@ tree-sitter-python = "0.25.0"
 tree-sitter-rust = "0.24.2"
 tree-sitter-swift = "0.7.4"
 tree-sitter-typescript = "0.23.2"
+wait-timeout = "0.2.1"
 
 [dev-dependencies]
 assert_cmd = "2.2.2"
@@ -46,3 +48,6 @@ must_use_candidate = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 similar_names = "allow"
+
+[target."cfg(unix)".dependencies]
+nix = { version = "0.31.3", features = ["signal"] }

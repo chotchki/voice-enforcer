@@ -2,17 +2,25 @@
 
 use std::path::Path;
 
-use crate::extract;
+use crate::extract::{self, ProseSpan};
 use crate::rules::{self, Finding};
 use crate::ruleset::Ruleset;
 
-/// Findings for `text` as the content of `path` (absolute), or none when the path is excluded.
-pub fn findings(ruleset: &Ruleset, path: &Path, text: &str) -> Vec<Finding> {
+#[derive(Debug, Default)]
+pub struct Evaluated {
+    pub spans: Vec<ProseSpan>,
+    pub findings: Vec<Finding>,
+}
+
+/// The prose spans and deterministic findings for `text` as the content of `path` (absolute),
+/// or nothing when the path is excluded.
+pub fn evaluate(ruleset: &Ruleset, path: &Path, text: &str) -> Evaluated {
     if ruleset.is_excluded(path) {
-        return Vec::new();
+        return Evaluated::default();
     }
     let spans = extract::extract(path, text, &ruleset.comment_directives);
-    rules::evaluate(ruleset, &spans, path)
+    let findings = rules::evaluate(ruleset, &spans, path);
+    Evaluated { spans, findings }
 }
 
 #[cfg(test)]
@@ -29,11 +37,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            findings(&rs, Path::new("/r/node_modules/x/README.md"), "leverage\n"),
+            evaluate(&rs, Path::new("/r/node_modules/x/README.md"), "leverage\n").findings,
             vec![]
         );
         assert_eq!(
-            findings(&rs, Path::new("/r/README.md"), "leverage\n").len(),
+            evaluate(&rs, Path::new("/r/README.md"), "leverage\n")
+                .findings
+                .len(),
             1
         );
     }

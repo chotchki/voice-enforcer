@@ -49,9 +49,11 @@ impl Fixture {
             cwd: root.join("elsewhere"),
             xdg_config_home: None,
             xdg_state_home: Some(root.join("state")),
+            xdg_cache_home: Some(root.join("cache")),
             ruleset_dir: Some(rules_dir),
             now: SystemTime::now(),
             exe: PathBuf::from("/bin/voice-enforcer"),
+            judge_child: false,
         };
         Self {
             _dir: dir,
@@ -423,4 +425,214 @@ fn helpers() {
         display_path(Path::new("/r/docs/a.md"), Path::new("/r")),
         "docs/a.md"
     );
+}
+
+mod judges {
+    use super::*;
+    use crate::judges::fake::FakeClaude;
+
+    fn rules_with_judges(
+        fake: &FakeClaude,
+        severity: &str,
+        scope: &str,
+        registers: &str,
+    ) -> String {
+        format!(
+            r#"{RULES}
+[judges]
+command = "{}"
+timeout_secs = 10
+
+[[judge]]
+id = "recap"
+severity = "{severity}"
+scope = "{scope}"
+registers = {registers}
+rubric = "RECAP_RUBRIC"
+"#,
+            fake.command()
+        )
+    }
+
+    fn recap_fake() -> FakeClaude {
+        FakeClaude::answering(&json!([
+            {"quote": "In conclusion, it is fast.", "explanation": "Restates the point.", "suggestion": "Cut it."}
+        ]))
+    }
+
+    #[test]
+    fn judge_child_exits_silently() {
+        let mut fx = Fixture::new(Some(RULES));
+        fx.env.judge_child = true;
+        assert!(fx.run("not even json").silent());
+    }
+
+    #[test]
+    fn deterministic_block_skips_the_judges() {
+        let fake = recap_fake();
+        let fx = Fixture::new(Some(&rules_with_judges(
+            &fake,
+            "warn",
+            "diff",
+            "[\"long_form\"]",
+        )));
+        let out = fx.write("README.md", "We leverage it. In conclusion, it is fast.\n");
+        assert_eq!(out.decision(), Some("deny"));
+        assert!(!out.reason().contains("recap"), "{}", out.reason());
+        assert_eq!(fake.calls(), 0);
+    }
+
+    #[test]
+    fn judge_warnings_join_deterministic_warnings() {
+        let fake = recap_fake();
+        let fx = Fixture::new(Some(&rules_with_judges(
+            &fake,
+            "warn",
+            "diff",
+            "[\"long_form\"]",
+        )));
+        let out = fx.write(
+            "README.md",
+            "A very fast cache. In conclusion, it is fast.\n",
+        );
+        assert_eq!(out.decision(), None);
+        insta::assert_snapshot!("judge_warn_context", out.context());
+        assert_eq!(fake.calls(), 1);
+    }
+
+    #[test]
+    fn blocking_judge_denies() {
+        let fake = recap_fake();
+        let fx = Fixture::new(Some(&rules_with_judges(
+            &fake,
+            "block",
+            "diff",
+            "[\"long_form\"]",
+        )));
+        let out = fx.write("README.md", "Fast cache. In conclusion, it is fast.\n");
+        assert_eq!(out.decision(), Some("deny"));
+        assert!(
+            out.reason()
+                .contains("[block] recap at README.md:1: \"In conclusion, it is fast.\""),
+            "{}",
+            out.reason()
+        );
+    }
+
+    #[test]
+    fn blocking_judge_counts_toward_the_loop_guard() {
+        let fake = recap_fake();
+        let fx = Fixture::new(Some(&rules_with_judges(
+            &fake,
+            "block",
+            "diff",
+            "[\"long_form\"]",
+        )));
+        for _ in 0..3 {
+            let out = fx.write("README.md", "Fast cache. In conclusion, it is fast.\n");
+            assert_eq!(out.decision(), Some("deny"));
+        }
+        let fourth = fx.write("README.md", "Fast cache. In conclusion, it is fast.\n");
+        assert_eq!(fourth.decision(), None);
+        assert!(fourth.context().contains("loop guard tripped"));
+        assert_eq!(fake.calls(), 1, "identical drafts come from the cache");
+    }
+
+    #[test]
+    fn judge_failure_is_a_note_never_a_deny() {
+        let fake = FakeClaude::new("garbage", 0, 0.0);
+        let fx = Fixture::new(Some(&rules_with_judges(
+            &fake,
+            "block",
+            "diff",
+            "[\"long_form\"]",
+        )));
+        let out = fx.write("README.md", "Fast cache. In conclusion, it is fast.\n");
+        assert_eq!(out.decision(), None);
+        assert!(
+            out.context()
+                .contains("- note: judge `recap` returned a verdict that didn't parse"),
+            "{}",
+            out.context()
+        );
+
+        let out = fx.write("README.md", "A very fast cache.\n");
+        assert!(
+            out.context().contains("[warn] no-very"),
+            "{}",
+            out.context()
+        );
+        assert!(
+            out.context().contains("- note: judge `recap`"),
+            "{}",
+            out.context()
+        );
+    }
+
+    #[test]
+    fn code_only_edit_makes_no_calls() {
+        let fake = recap_fake();
+        let fx = Fixture::new(Some(&rules_with_judges(
+            &fake,
+            "warn",
+            "diff",
+            "[\"long_form\", \"comment\"]",
+        )));
+        let path = fx.file(
+            "lib.rs",
+            "// Adds one.\nfn f(x: u8) -> u8 {\n    x + 1\n}\n",
+        );
+        let out = fx.run(&fx.payload(
+            "s1",
+            "Edit",
+            &json!({"file_path": path, "old_string": "x + 1", "new_string": "x + 2"}),
+        ));
+        assert!(out.silent());
+        assert_eq!(fake.calls(), 0);
+    }
+
+    #[test]
+    fn register_filter_skips_the_judge() {
+        let fake = recap_fake();
+        let fx = Fixture::new(Some(&rules_with_judges(
+            &fake,
+            "warn",
+            "diff",
+            "[\"long_form\"]",
+        )));
+        assert!(
+            fx.write("lib.rs", "// In conclusion, it is fast.\nfn f() {}\n")
+                .silent()
+        );
+        assert_eq!(fake.calls(), 0);
+    }
+
+    #[test]
+    fn whole_judge_quoting_untouched_text_is_dropped() {
+        let fake = recap_fake();
+        let fx = Fixture::new(Some(&rules_with_judges(
+            &fake,
+            "block",
+            "whole",
+            "[\"long_form\"]",
+        )));
+        let path = fx.file(
+            "README.md",
+            "In conclusion, it is fast.\n\nOld second paragraph.\n",
+        );
+        let out = fx.run(&fx.payload(
+            "s1",
+            "Edit",
+            &json!({"file_path": path, "old_string": "Old second paragraph.", "new_string": "New second paragraph."}),
+        ));
+        assert!(
+            out.silent(),
+            "the quote sits on line 1, which didn't change"
+        );
+        assert_eq!(fake.calls(), 1);
+        assert!(
+            fake.stdin().contains("In conclusion, it is fast."),
+            "a whole judge sees the old text"
+        );
+    }
 }

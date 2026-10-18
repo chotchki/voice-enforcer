@@ -4,6 +4,7 @@ mod check;
 mod env;
 mod extract;
 mod hook;
+mod judges;
 mod pipeline;
 mod rules;
 mod ruleset;
@@ -41,6 +42,9 @@ enum Command {
         ruleset: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = check::Format::Text)]
         format: check::Format,
+        /// Also run the ruleset's LLM judges (off by default; needs an authenticated `claude`).
+        #[arg(long)]
+        judges: bool,
     },
     /// Write the example ruleset to the ruleset directory.
     Init {
@@ -96,7 +100,16 @@ where
             paths,
             ruleset,
             format,
-        } => check::check(&paths, ruleset.as_deref(), format, stdout, stderr, env),
+            judges,
+        } => check::check(
+            &paths,
+            ruleset.as_deref(),
+            format,
+            judges,
+            stdout,
+            stderr,
+            env,
+        ),
         Command::Validate { ruleset } => check::validate(ruleset.as_deref(), stdout, stderr, env),
         Command::Install { settings, dry_run } => setup::settings(
             setup::Action::Install,

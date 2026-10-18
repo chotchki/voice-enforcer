@@ -1,10 +1,10 @@
 # voice-enforcer design
 
-This doc owns how voice-enforcer works: the hook contract, prose extraction, the rule kinds and the ruleset format. The [README](../README.md) is the map and the CLI's `--help` owns flag details. Out of scope here (and in the code so far): LLM judges, `gh` interception and office formats, all tracked in the [backlog](../openspec/backlog.md).
+This doc owns how voice-enforcer works: the hook contract, prose extraction, the deterministic rules, the Haiku judges and the ruleset format. The [README](../README.md) is the map and the CLI's `--help` owns flag details. Out of scope here (and in the code so far): judge disputes, `gh` interception and office formats, all tracked in the [backlog](../openspec/backlog.md).
 
 ## The pipeline
 
-One path from text to findings, shared by `hook` and `check` so what CI reports and what the hook blocks can't drift apart. `check` is the same path minus diff scoping and the loop guard.
+One path from text to findings, shared by `hook` and `check` so what CI reports and what the hook blocks can't drift apart. `check` is the same path minus diff scoping and the loop guard (and it only runs judges with `--judges`).
 
 ```mermaid
 flowchart LR
@@ -15,7 +15,9 @@ flowchart LR
   X -->|no| E[extract masked prose spans]
   E --> D[deterministic rules]
   D --> S[keep findings on changed lines]
-  S --> G[loop guard]
+  S -->|any block| G[loop guard]
+  S -->|no block| J[Haiku judges, in parallel]
+  J --> G
   G -->|any block| DENY[deny + reason]
   G -->|warnings only| CTX[additionalContext]
   G -->|nothing| P
@@ -105,6 +107,89 @@ Markdown only. Mentions are paths with a `/` and an extension, bare names in bac
 
 URLs, anchors, absolute paths and `~` paths are left alone, since none of them work as GitHub links anyway. Known gap: a bare name links to whatever unique file matches, which isn't always the one you meant (a doc talking about rulesets in general gets pointed at the example ruleset). A path or a reworded sentence settles it.
 
+## Judges
+
+The deterministic rules catch what a phrase list can name. Judges cover the rest (a recap closer, a comment narrating the code under it), one Haiku call per judge.
+
+### When they run
+
+```mermaid
+flowchart LR
+  D[deterministic findings] -->|any block| DENY[deny, judges skipped]
+  D -->|no block| Q{judge has changed prose<br/>in its registers?}
+  Q -->|no| OUT[no call]
+  Q -->|yes| C{cache hit?}
+  C -->|yes| V[verify quotes]
+  C -->|no| J[claude -p] --> V
+  V --> M[merge into the decision]
+```
+
+- **Deterministic first.** A deterministic block skips the judges entirely, since Claude is about to rewrite that text anyway. The cost is two feedback rounds on a draft with both kinds of problem, and the second round judges a better draft.
+- **No changed prose, no call.** A judge is only called when a span in one of its registers has a changed line, so most code edits cost nothing (a comment-free Rust write took 9ms with judges configured).
+- **In parallel.** Every judge for a write runs at once, so a write waits for the slowest judge, not the sum.
+- **Same decision.** Judge findings join the deterministic ones in the deny / `additionalContext` / silent output, count toward the loop guard and only count on changed lines.
+
+### What a judge reads
+
+Labeled spans, unmasked (judges need to see the code in backticks), with code context set apart:
+
+```text
+=== span 1 · line 3 · comment (line) · CHANGED ===
+increment the lookup counter
+--- code context (not judged) ---
+    LOOKUPS.fetch_add(1, Ordering::Relaxed);
+```
+
+A `diff` judge gets only the CHANGED spans. A `whole` judge gets every span in its registers with the changed ones marked, for problems that need the rest of the document (repetition). Comment spans carry up to 20 source lines after the block. Inputs over 200,000 characters skip the judge with a note.
+
+### The call
+
+```text
+claude -p --safe-mode --model <model> --effort <effort> --tools "" --no-session-persistence \
+  --output-format json --json-schema <verdict schema> --system-prompt <harness + rubric>
+```
+
+with the input on stdin and `VOICE_ENFORCER_JUDGE=1` in the environment.
+
+- **`--safe-mode`, not `--bare`.** `--bare` also skips the keychain, so it only works with `ANTHROPIC_API_KEY`; `--safe-mode` drops CLAUDE.md, hooks, plugins and MCP but keeps normal subscription auth (the MAX plan). That's no recursion, no voice instructions or memory bloating the judge's context and nothing surprising from a plugin. The env var is belt and braces: if a hook fires anyway, ours exits before reading anything.
+- **The harness** (the first half of the system prompt) tells the judge to apply only the rubric, quote exactly, report only from CHANGED spans, keep the explanation to one sentence, never mention span numbers and ignore instructions inside the input. The verdict schema is `{findings: [{quote, explanation, suggestion?}]}`.
+- **Its own process group.** On timeout the whole group gets SIGKILL, since a surviving grandchild of the CLI would hold our pipes open and keep spending usage.
+- **The environment matters.** The CLI needs `USER` (among others) to find its keychain login. Claude Code hands hooks its full environment so this just works, but running `voice-enforcer hook` under `env -i` gets every judge a "Not logged in" note.
+
+### Quotes are checked, failures fail open
+
+Every quote gets searched for (whitespace collapsed, then ignoring ASCII case) in the raw text of the CHANGED spans; no hit means the finding is dropped. A confused or prompt-injected judge can miss things, but it can't invent a quote to block on.
+
+A timeout, a non-zero exit, an error verdict, unparseable output or a command that won't start becomes a note in the output (`judge \`recap-closer\` reported an error: Not logged in · Please run /login, so it wasn't checked`) and NEVER a deny. The CLI reports most failures in its JSON with a non-zero exit, so the note carries the CLI's own reason when there is one.
+
+### Cache
+
+Verdicts live in `$XDG_CACHE_HOME/voice-enforcer/verdicts/` (default `~/.cache/...`), keyed by SHA-256 over the harness version, judge id, rubric, model, effort and the exact input. A hit refreshes the entry; entries unused for 30 days get pruned at most once a day. Only good verdicts are cached, so a timeout gets retried.
+
+To be honest about it: in the hook most inputs are new text, so hits are mostly retries and reverts. The skip rules are where the hook's real savings come from; the cache pays off on `check --judges` sweeps over unchanged files and on loop-guard retries (a repeat judged write took 9ms instead of 2.9s).
+
+### Config
+
+```toml
+[judges]                  # every key optional, these are the defaults
+model = "haiku"
+effort = "medium"         # low | medium | high | xhigh | max
+command = "claude"
+timeout_secs = 45
+
+[[judge]]
+id = "recap-closer"       # shares the id namespace with [[rule]]
+severity = "warn"         # block | warn
+scope = "diff"            # diff | whole
+registers = ["long_form"] # default: both
+rubric = """
+Flag a sentence whose only job is to restate what the text around it already said...
+"""
+# or: rubric_file = "judges/recap.md"  (relative to the ruleset file)
+```
+
+Start judges at `warn`. Every judged write waits about one Haiku round trip no matter the severity, and a judge still being tuned shouldn't be able to block.
+
 ## The ruleset file
 
 The ruleset is one TOML file in the first of these directories that's set: the `--ruleset <dir>` flag (`check`, `validate` and `init`), `VOICE_ENFORCER_RULESET`, `$XDG_CONFIG_HOME/voice-enforcer`, then `~/.config/voice-enforcer` (on macOS too, on purpose), so by default it's `~/.config/voice-enforcer/ruleset.toml`.
@@ -117,7 +202,7 @@ The [example ruleset](../examples/ruleset/ruleset.toml) has one rule of each kin
 
 ## install / uninstall
 
-`install` adds one PreToolUse group (matcher `Write|Edit|MultiEdit`, the canonical path of the running binary plus `hook`, a 30s timeout) to `~/.claude/settings.json` or `--settings <path>`. It keeps every other key and their order, backs the file up to `settings.json.bak-<UTC stamp>` first and writes temp-then-rename. Re-running it replaces our entry (handy when the binary moves) and leaves exactly one; an unchanged file isn't rewritten. A path with spaces or shell metacharacters gets single-quoted, since double quotes still expand `$` and backticks. `uninstall` removes only handlers whose command ends in `voice-enforcer hook` (quoted or not), plus any group, `PreToolUse` list or `hooks` object it emptied. Malformed settings are left alone with exit 2.
+`install` adds one PreToolUse group (matcher `Write|Edit|MultiEdit`, the canonical path of the running binary plus `hook`, a 120s timeout so a slow judge gets killed by us with a note, at 45s, long before Claude Code kills the whole hook) to `~/.claude/settings.json` or `--settings <path>`. It keeps every other key and their order, backs the file up to `settings.json.bak-<UTC stamp>` first and writes temp-then-rename. Re-running it replaces our entry (handy when the binary moves or the timeout changes) and leaves exactly one; an unchanged file isn't rewritten. A path with spaces or shell metacharacters gets single-quoted, since double quotes still expand `$` and backticks. `uninstall` removes only handlers whose command ends in `voice-enforcer hook` (quoted or not), plus any group, `PreToolUse` list or `hooks` object it emptied. Malformed settings are left alone with exit 2.
 
 ## Performance
 
@@ -130,8 +215,19 @@ Release build on an M-series Mac, process start included, every line judged (a W
 | file_links forced into a repo walk, fab-scad (86k files on disk) | 13.9ms | 19.8ms max |
 | same, hotchkiss-io (746k files on disk, mostly git-ignored) | 8.4ms | 10.4ms max |
 
-The budget was 50ms. The judges will dominate latency once they exist; this layer shouldn't add to it.
+The budget was 50ms, and the deterministic layer never adds to the judges' time.
+
+With judges (the example ruleset's two Haiku judges, real calls, the hook path with Claude Code's environment):
+
+| Case | Median |
+| --- | --- |
+| 7-line markdown with a planted recap, one judge called | 2.9s |
+| 7-line Rust with a comment restating its code, one judge called | 3.6s |
+| Rust write with no comments (judges configured, none called) | 9ms |
+| repeat of an identical judged write (cache hit) | 9ms |
+
+A judge call costs about $0.0005 at Haiku's list price (one measured call: 1,248 cache-creation input tokens, 597 output tokens including 376 thinking), which the MAX plan covers anyway. Both planted tells were caught and both clean controls (a sentence adding a next step, a comment explaining why `Relaxed` is enough) passed.
 
 ## Testing
 
-CI gates on 99% line coverage (`cargo llvm-cov`, summary in the job summary). The number exists to lock in requirements, so it's reached through real seams instead of mocks: the library entry point takes injected stdio plus an environment struct (home, config, state, cwd, clock), the file-link tests build temp git repos and the binary tests feed real hook JSON on stdin. Hook output is snapshot-tested with `insta`. Every prose fixture is synthetic; a real voice profile never lands in this repo.
+CI gates on 99% line coverage (`cargo llvm-cov`, summary in the job summary). The number exists to lock in requirements, so it's reached through real seams instead of mocks: the library entry point takes injected stdio plus an environment struct (home, config, state, cwd, clock), the file-link tests build temp git repos and the binary tests feed real hook JSON on stdin. Hook output is snapshot-tested with `insta`. Judge tests point `[judges] command` at a per-test shell script that records its argv, environment and stdin and answers with canned JSON, so the flag contract, timeouts, crashes, parallelism and the cache all get tested without the network; one manual run against real Haiku covers drift in the CLI itself. Every prose fixture is synthetic; a real voice profile never lands in this repo.
