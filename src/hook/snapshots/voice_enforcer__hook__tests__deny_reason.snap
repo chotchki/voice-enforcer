@@ -1,0 +1,7 @@
+---
+source: src/hook/tests.rs
+expression: out.reason()
+---
+voice-enforcer blocked this write to README.md: 1 blocking and 1 warning finding(s). Fix the blocking ones and retry.
+- [block] no-leverage at README.md:3: "leverage" - Marketing verb (suggestion: say what it does)
+- [warn] no-very at README.md:3: "very" - Intensifier

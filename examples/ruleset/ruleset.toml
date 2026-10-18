@@ -1,0 +1,70 @@
+# Example voice-enforcer ruleset.
+#
+# A starting point, not anyone's voice. `voice-enforcer init` copies it to
+# ~/.config/voice-enforcer/ruleset.toml; replace the rules with your own from there.
+version = 1
+
+# Absolute-path globs for files that aren't yours to restyle; `~` expands to your home.
+exclude = []
+
+# Extra patterns for tool-directive comments, on top of the built-in eslint/noqa/swiftlint list.
+comment_directives = []
+
+[loop_guard]
+# After this many denies in a row on one file in one session, the findings become warnings so a
+# misfiring rule can't wedge a session.
+max_consecutive_blocks = 3
+
+# Buzzwords signal hype without saying anything, so they block outright.
+[[rule]]
+id = "no-buzzwords"
+kind = "phrase"
+severity = "block"
+message = "Buzzword: hype without content"
+suggestion = "name what the thing actually does"
+phrases = ["synergy", "game-changing", "paradigm shift", "next-generation", "revolutionary"]
+# The history lesson is fine.
+allow_when = ['(?i)revolutionary war']
+
+# Openers that delay the point. Long-form only: a comment this padded has bigger problems.
+[[rule]]
+id = "no-throat-clearing"
+kind = "phrase"
+severity = "warn"
+registers = ["long_form"]
+message = "Throat-clearing opener"
+suggestion = "start with the point"
+phrases = ["it is worth noting that", "it goes without saying", "needless to say"]
+
+# An intensifier propping up a word that should carry itself.
+[[rule]]
+id = "no-intensifiers"
+kind = "regex"
+severity = "warn"
+message = "Intensifier propping up a weak word"
+suggestion = "pick the stronger word instead"
+pattern = '(?i)\b(?:very|really|extremely) (?:unique|important|critical)\b'
+
+# A house-style choice, shown as a warning since the detection is a heuristic.
+[[rule]]
+id = "serial-comma"
+kind = "oxford_comma"
+severity = "warn"
+registers = ["long_form"]
+message = "House style drops the serial comma"
+suggestion = "remove the comma before the final and/or"
+
+# Comments that run long usually belong in docs.
+[[rule]]
+id = "comment-length"
+kind = "sentence_limit"
+severity = "warn"
+message = "Comment runs long; trim it or move the detail into docs"
+max_sentences = { line = 1, item = 2, module = 5 }
+
+# Readers on GitHub can click a link; they can't click a bare file name.
+[[rule]]
+id = "link-named-files"
+kind = "file_links"
+severity = "warn"
+message = "Named file isn't linked"

@@ -1,0 +1,6 @@
+---
+source: src/hook/tests.rs
+expression: out.context()
+---
+voice-enforcer warnings for README.md (the write went through):
+- [warn] no-very at README.md:1: "very" - Intensifier

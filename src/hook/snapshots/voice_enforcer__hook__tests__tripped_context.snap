@@ -1,0 +1,6 @@
+---
+source: src/hook/tests.rs
+expression: fourth.context()
+---
+voice-enforcer loop guard tripped: README.md was blocked 3 times in a row this session, so its blocking findings are warnings this time. Fix them anyway, or tell the user a rule looks wrong.
+- [block] no-leverage at README.md:1: "leverage" - Marketing verb (suggestion: say what it does)

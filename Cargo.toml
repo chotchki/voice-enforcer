@@ -1,0 +1,48 @@
+[package]
+name = "voice-enforcer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+description = "Holds Claude Code's written output to a voice ruleset at write time, via a PreToolUse hook"
+license = "MIT OR Apache-2.0"
+authors = ["Christopher Hotchkiss <chris@hotchkiss.io>"]
+readme = "README.md"
+keywords = ["claude", "hooks", "lint", "prose", "voice"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+globset = "0.4.20"
+ignore = "0.4.33"
+pulldown-cmark = { version = "0.13.4", default-features = false }
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+similar = "3.2.0"
+toml = "1.1.8"
+tree-sitter = "0.27.1"
+tree-sitter-bash = "0.25.1"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-python = "0.25.0"
+tree-sitter-rust = "0.24.2"
+tree-sitter-swift = "0.7.4"
+tree-sitter-typescript = "0.23.2"
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
+insta = "1.49.0"
+predicates = "3.1.4"
+tempfile = "3.27.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+similar_names = "allow"

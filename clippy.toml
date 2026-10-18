@@ -1,0 +1,2 @@
+too-many-lines-threshold = 120
+doc-valid-idents = ["PreToolUse", "PostToolUse", "MultiEdit", "NotebookEdit", ".."]
