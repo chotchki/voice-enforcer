@@ -2,7 +2,7 @@
 
 ## AB. Haiku judges: the judgment-call tells get a second layer
 
-- [ ] AB.0 Phase exit: every box ticked, every ci.yml job green on the landing commit (the 99% coverage gate included), docs/design.md and README.md updated, and the real-Haiku smoke run (AB.12) passing. The combined soak with aa's AA.19 follows this phase
+- [x] AB.0 Phase exit: every box ticked, every ci.yml job green on the landing commit (the 99% coverage gate included), docs/design.md and README.md updated, and the real-Haiku smoke run (AB.12) passing. The combined soak with aa's AA.19 follows this phase
 - [x] AB.1 Ruleset: `[judges]` (model, effort, command, `timeout_secs` with their defaults) and `[[judge]]` (id, severity, scope, registers, exactly one of `rubric` / `rubric_file` resolved against the ruleset directory), parsed spanned like `[[rule]]`, judge ids sharing the rule id namespace. Unit tests cover every error in the Judge configuration requirement (both rubric forms, a missing file, a duplicate id across rules and judges, an unknown scope) plus the defaults
 - [x] AB.2 Spans carry the unmasked text with its own line map and, for comment blocks, up to 20 source lines of code context after the block, built by the span builder in the same pass as the masked text. Tests check raw text and line mapping for markdown, plain text and a code comment, and code context at a file's end (fewer than 20 lines left)
 - [x] AB.3 Judge input builder: the labeled span format from the design, diff scope (changed spans only) vs whole scope (all spans, changed ones marked), register filtering, code context blocks and the 200k character cap. `insta` snapshots of a diff input, a whole input and a comment with code context
