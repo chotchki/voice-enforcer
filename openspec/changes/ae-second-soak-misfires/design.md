@@ -2,7 +2,7 @@
 
 ## Context
 
-Motivation is in [proposal.md](proposal.md) (Why). The evidence is 49 disputes filed between 2026-10-18 22:09Z and 10-19 07:34Z on ad's binary, plus one more the hook produced on this change's own proposal. What exists today:
+Motivation is in [proposal.md](proposal.md) (Why). The evidence is 51 disputes filed between 2026-10-18 22:09Z and 10-19 07:34Z on ad's binary, plus one more the hook produced on this change's own proposal. What exists today:
 
 - [src/changes.rs](/src/changes.rs) records, per changed line, the set of words the write added or replaced and an `opaque` flag for a line with a deletion or a word-less change. `quote_overlaps` keeps a quote when a line in its range is opaque or shares any word with it.
 - `verify::locate` in [src/judges/verify.rs](/src/judges/verify.rs) finds the quote in the span's raw text and maps it to source LINES. Spans keep `(raw offset, line)` segments and no source bytes.

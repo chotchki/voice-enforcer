@@ -2,7 +2,7 @@
 
 ## Why
 
-ad's binary went in on 2026-10-18 and the soak ran on it overnight. ad's hint worked: 49 disputes came in by 10-19 07:34Z, triage upheld 48 of them and not one agent rewrote text to satisfy a wrong warning. That makes disputes the soak's data now instead of misfires inferred from samples. 31 of the upheld ones were ruleset-side and the private ruleset took those fixes the same morning. The other 17 come from the binary, where no ruleset edit can reach them: this change fixes 15 and pins the last 2 as known misfires.
+ad's binary went in on 2026-10-18 and the soak ran on it overnight. ad's hint worked: 51 disputes came in by 10-19 07:34Z, triage upheld 50 of them and not one agent rewrote text to satisfy a wrong warning. That makes disputes the soak's data now instead of misfires inferred from samples. 33 of the upheld ones were ruleset-side and the private ruleset took those fixes the same morning. The other 17 come from the binary, where no ruleset edit can reach them: this change fixes 15 and pins the last 2 as known misfires.
 
 ## What Changes
 
@@ -27,7 +27,7 @@ Both requirements were last changed by ad, and `deterministic-rules` still lives
 
 - The value aside. A value set off by commas looks like a list item to every count-based test, so the corpus pins it next to ad's `X, aside, and Y` cases.
 - Positions for the deterministic rules. They're scoped by line (aa's call: a line you rewrote is yours) and that doesn't change.
-- The 31 ruleset-side disputes: OpenSpec spec files skipped by `repeats` and `verdict-first`, plus narrower rubrics for inventories, rejected options and field docs. They're in the private ruleset.
+- The 33 ruleset-side disputes: OpenSpec spec files skipped by `repeats` and `verdict-first`, plus narrower rubrics for inventories, rejected options and field docs. They're in the private ruleset.
 
 ## Impact
 
