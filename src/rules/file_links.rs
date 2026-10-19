@@ -149,6 +149,14 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// A missing file in a directory that's here is likely a stale reference; one in a
+    /// directory that isn't names something outside the repo (a disc image, a runtime folder).
+    fn parent_exists(&self, mention: &str) -> bool {
+        let parent = Path::new(mention).parent().unwrap_or(Path::new(""));
+        self.md_dir.join(parent).is_dir()
+            || self.root.as_ref().is_some_and(|r| r.join(parent).is_dir())
+    }
+
     fn build_index(&self, root: &Path) -> Index {
         let mut files = Vec::new();
         let mut truncated = false;
@@ -238,9 +246,9 @@ pub(super) fn check(rule: &Rule, span: &ProseSpan, resolver: &Resolver) -> Vec<F
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mention {
-    /// Holds a `/`: warn when it can't be found.
+    /// Holds a `/`: warn when it can't be found in a directory that exists.
     Path,
-    /// A bare name that should warn when it can't be found.
+    /// A bare name that should warn when it matches several files.
     KnownName,
     /// A bare name that only counts if it resolves.
     MaybeName,
@@ -303,7 +311,9 @@ fn report(
                 Some(format!("link it: [{text}]({rel})")),
             ));
         }
-        Resolution::Missing { truncated } if kind != Mention::MaybeName => {
+        Resolution::Missing { truncated }
+            if kind == Mention::Path && resolver.parent_exists(mention) =>
+        {
             let note = if truncated {
                 format!(" (the search stopped after {} files)", resolver.cap)
             } else {

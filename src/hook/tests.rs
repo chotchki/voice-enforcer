@@ -826,4 +826,29 @@ rubric = "RECAP_RUBRIC"
             "a whole judge sees the old text"
         );
     }
+
+    #[test]
+    fn untouched_sentence_on_an_edited_one_line_paragraph_is_dropped() {
+        // The first edit adds "is", which the quote holds too; the second only deletes a word.
+        for (old, new) in [("stays", "is"), ("stays warm", "stays")] {
+            let fake = recap_fake();
+            let fx = Fixture::new(Some(&rules_with_judges(
+                &fake,
+                "block",
+                "whole",
+                "[\"long_form\"]",
+            )));
+            let path = fx.file(
+                "README.md",
+                "In conclusion, it is fast. The cache stays warm.\n",
+            );
+            let out = fx.run(&fx.payload(
+                "s1",
+                "Edit",
+                &json!({"file_path": path, "old_string": old, "new_string": new}),
+            ));
+            assert!(out.silent(), "{old} -> {new}: {}", out.reason());
+            assert_eq!(fake.calls(), 1);
+        }
+    }
 }

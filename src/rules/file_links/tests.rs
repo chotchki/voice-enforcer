@@ -73,7 +73,7 @@ fn linked_file_is_fine() {
 
 #[test]
 fn named_file_missing_is_a_warn() {
-    let dir = repo(&[]);
+    let dir = repo(&["src/keep.rs", "docs/keep.md"]);
     let got = check_md(
         dir.path(),
         "README.md",
@@ -85,6 +85,23 @@ fn named_file_missing_is_a_warn() {
         assert!(f.message.contains("not found"), "{}", f.message);
         assert_eq!(f.suggestion, None);
     }
+}
+
+#[test]
+fn missing_path_beside_the_markdown_file_warns() {
+    let dir = repo(&["guide/notes/keep.md"]);
+    let got = check_md(dir.path(), "guide/README.md", "See `notes/gone.md`.\n");
+    assert_eq!(
+        summary(&got),
+        vec![(Severity::Warn, "notes/gone.md".into(), None)]
+    );
+}
+
+#[test]
+fn missing_files_outside_the_repo_stay_quiet() {
+    let dir = repo(&["src/keep.rs"]);
+    let src = "Read `disc/levels/one.bin`, then `manifest.json` and data/out.csv.\n";
+    assert_eq!(check_md(dir.path(), "README.md", src), vec![]);
 }
 
 #[test]
@@ -195,11 +212,11 @@ fn suggestion_wraps_paths_with_spaces() {
 
 #[test]
 fn search_cap_is_reported() {
-    let dir = repo(&["a.rs", "b.rs", "c.rs"]);
+    let dir = repo(&["a.rs", "b.rs", "src/c.rs"]);
     let rs = ruleset();
     let path = dir.path().join("README.md");
     let resolver = Resolver::new(&path, &rs, 2);
-    let spans = extract(&path, "Check `nowhere.rs` now.\n", &[]);
+    let spans = extract(&path, "Check `src/nowhere.rs` now.\n", &[]);
     let got = check(&rs.rules[0], &spans[0], &resolver);
     assert_eq!(got.len(), 1);
     assert!(
@@ -222,14 +239,12 @@ fn outside_a_repo_only_relative_paths_resolve() {
     );
     assert_eq!(
         summary(&got),
-        vec![
-            (
-                Severity::Block,
-                "sub/a.md".into(),
-                Some("link it: [`sub/a.md`](sub/a.md)".into())
-            ),
-            (Severity::Warn, "top.md".into(), None),
-        ]
+        vec![(
+            Severity::Block,
+            "sub/a.md".into(),
+            Some("link it: [`sub/a.md`](sub/a.md)".into())
+        )],
+        "`top.md` sits above the markdown file, where nothing searches"
     );
 }
 
@@ -244,15 +259,12 @@ fn ignored_and_excluded_files_are_not_searched() {
     );
     assert_eq!(
         summary(&got),
-        vec![
-            (Severity::Warn, "gen.md".into(), None),
-            (Severity::Warn, "dep.md".into(), None),
-            (
-                Severity::Block,
-                "real.md".into(),
-                Some("link it: [`real.md`](src/real.md)".into())
-            ),
-        ]
+        vec![(
+            Severity::Block,
+            "real.md".into(),
+            Some("link it: [`real.md`](src/real.md)".into())
+        )],
+        "the ignored and excluded copies never resolve"
     );
 }
 

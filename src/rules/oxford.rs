@@ -94,7 +94,13 @@ fn is_list(items: &[&str], max_item_words: usize) -> bool {
         return false;
     }
     let lone_intro = items.len() == 2 && INTRO_WORDS.contains(&items[0].to_lowercase().as_str());
-    !lone_intro
+    // "the saved copy, not the live one, and" is a contrast, and no real item opens on "not".
+    let contrast = items[1..].iter().any(|i| {
+        i.split_whitespace()
+            .next()
+            .is_some_and(|w| w.eq_ignore_ascii_case("not"))
+    });
+    !lone_intro && !contrast
 }
 
 #[cfg(test)]
@@ -119,6 +125,12 @@ mod tests {
             ("The plan\u{2014}red, green, and blue\u{2014}held.", 1),
             ("one \u{2013} two, and three", 0),
             ("Caf\u{e9}s, bars, and clubs", 1),
+            (
+                "It reads the saved copy, not the live one, and the cache stays cold.",
+                0,
+            ),
+            ("Ask twice, Not once, or never.", 0),
+            ("knots, nots, and bolts", 1),
         ];
         for (text, want) in cases {
             assert_eq!(serial_commas(text, 4).len(), *want, "{text:?}");
@@ -143,13 +155,16 @@ mod tests {
         }
     }
 
-    /// Known misfires: a comma-bracketed aside before a clause reads as a list. Pinned so a
-    /// fix shows up as a diff here; ad's design.md has what was tried.
+    /// Known misfires: a comma-bracketed aside before a clause reads as a list, a value set off
+    /// by commas included. Pinned so a fix shows up as a diff here; ad's and ae's design.md have
+    /// what was tried.
     #[test]
     fn aside_before_a_clause_still_fires() {
         for text in [
             "Saves the file, open or not, and closes the tab.",
             "The extra bytes stay in memory, past the end, and nothing reads them.",
+            "It sets the timeout, 5 s, and retries once.",
+            "The floor sits at 12.5, flat to a degree, and nothing slides.",
         ] {
             assert_eq!(serial_commas(text, 4).len(), 1, "{text}");
         }

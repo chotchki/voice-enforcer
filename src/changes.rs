@@ -1,4 +1,4 @@
-//! What a write changed: the lines holding a changed word, and the words themselves.
+//! What a write changed: the lines holding a changed word, the words themselves and where they sit.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::{Range, RangeInclusive};
@@ -9,10 +9,19 @@ use similar::{Algorithm, DiffTag, TextDiff};
 /// Past this the word diff approximates, which only ever marks more text as changed.
 const WORD_DIFF_TIMEOUT: Duration = Duration::from_millis(100);
 
+/// Source words a quote's alignment may skip between two of its own: a link target, inline HTML
+/// or an entity puts words in the file that the judged text doesn't hold.
+const MAX_SKIP: usize = 16;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Changes {
     /// `None` means every line changed (a new file, or `check`).
     lines: Option<HashMap<usize, LineChange>>,
+    /// Byte ranges in `after` this write put there: each added or replaced token, and each
+    /// deletion as the gap it left between the tokens around it.
+    marks: Vec<Range<usize>>,
+    after: String,
+    starts: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -24,7 +33,12 @@ struct LineChange {
 
 impl Changes {
     pub(crate) fn all() -> Self {
-        Self { lines: None }
+        Self {
+            lines: None,
+            marks: Vec::new(),
+            after: String::new(),
+            starts: Vec::new(),
+        }
     }
 
     /// Exactly these lines changed, in a way any quote on them overlaps.
@@ -36,6 +50,7 @@ impl Changes {
         };
         Self {
             lines: Some(lines.iter().map(|&l| (l, opaque.clone())).collect()),
+            ..Self::all()
         }
     }
 
@@ -49,6 +64,7 @@ impl Changes {
             return Self::all();
         };
         let mut lines: HashMap<usize, LineChange> = HashMap::new();
+        let mut marks = Vec::new();
         let old_starts = line_starts(before);
         let new_starts = line_starts(after);
         // A line diff finds the hunks; a word diff inside each one drops reflow and re-indentation.
@@ -57,7 +73,9 @@ impl Changes {
                 continue;
             }
             let old_text = &before[byte_range(&old_starts, before.len(), &old)];
-            let new_text = &after[byte_range(&new_starts, after.len(), &new)];
+            let new_bytes = byte_range(&new_starts, after.len(), &new);
+            let base = new_bytes.start;
+            let new_text = &after[new_bytes];
             // Whitespace stays out of the diff: kept in, a space can out-match a word for the LCS.
             let old_words = tokens(old_text);
             let new_words = tokens(new_text);
@@ -76,6 +94,7 @@ impl Changes {
                     DiffTag::Equal => {}
                     DiffTag::Insert | DiffTag::Replace => {
                         for &(at, token) in &new_words[op.new_range()] {
+                            marks.push(base + at..base + at + token.len());
                             let change = lines.entry(line_of(at)).or_default();
                             let known = change.words.len();
                             change.words.extend(word_keys(token));
@@ -85,15 +104,23 @@ impl Changes {
                         }
                     }
                     DiffTag::Delete => {
-                        let at = new_words
-                            .get(op.new_range().start)
-                            .map_or(new_text.len(), |t| t.0);
+                        let i = op.new_range().start;
+                        let at = new_words.get(i).map_or(new_text.len(), |t| t.0);
+                        let gap_start = i
+                            .checked_sub(1)
+                            .map_or(0, |p| new_words[p].0 + new_words[p].1.len());
+                        marks.push(base + gap_start..base + at);
                         lines.entry(line_of(at)).or_default().opaque = true;
                     }
                 }
             }
         }
-        Self { lines: Some(lines) }
+        Self {
+            lines: Some(lines),
+            marks,
+            after: after.to_owned(),
+            starts: new_starts,
+        }
     }
 
     /// Whether any line in `lines` (1-based) changed; always true when every line did.
@@ -103,17 +130,64 @@ impl Changes {
             .is_none_or(|map| lines.into_iter().any(|l| map.contains_key(&l)))
     }
 
-    /// Whether `quote`, found on `lines`, holds a word this write changed there. A line whose
-    /// change has no word to match (a deletion, a comma) counts for any quote on it.
+    /// Whether `quote`, found on `lines`, holds text this write put there: a changed token or a
+    /// deletion inside the quote, wherever it can be placed on those lines. A quote that can't be
+    /// placed falls back to sharing a changed word with its lines, or any line with a deletion
+    /// or a word-less change, which over-reports.
     pub(crate) fn quote_overlaps(&self, lines: RangeInclusive<usize>, quote: &str) -> bool {
         let Some(map) = &self.lines else {
             return true;
         };
-        let quoted: HashSet<String> = word_keys(quote).collect();
-        lines
+        let windows = self.place(&lines, quote);
+        if windows.is_empty() {
+            let quoted: HashSet<String> = word_keys(quote).collect();
+            return lines
+                .into_iter()
+                .filter_map(|l| map.get(&l))
+                .any(|change| change.opaque || !change.words.is_disjoint(&quoted));
+        }
+        windows.iter().any(|w| {
+            self.marks
+                .iter()
+                .any(|m| m.start <= w.end && w.start <= m.end)
+        })
+    }
+
+    /// Every byte window on `lines` of `after` whose words hold `quote`'s words in order, from
+    /// the start of the first one's token to the end of the last one's.
+    fn place(&self, lines: &RangeInclusive<usize>, quote: &str) -> Vec<Range<usize>> {
+        let wanted: Vec<String> = word_keys(quote).collect();
+        let Some(first) = wanted.first() else {
+            return Vec::new();
+        };
+        let span = byte_range(
+            &self.starts,
+            self.after.len(),
+            &(lines.start().saturating_sub(1)..*lines.end()),
+        );
+        let base = span.start;
+        let words: Vec<(String, Range<usize>)> = tokens(&self.after[span])
             .into_iter()
-            .filter_map(|l| map.get(&l))
-            .any(|change| change.opaque || !change.words.is_disjoint(&quoted))
+            .flat_map(|(at, token)| {
+                word_keys(token).map(move |w| (w, base + at..base + at + token.len()))
+            })
+            .collect();
+        let mut out = Vec::new();
+        'starts: for start in (0..words.len()).filter(|&i| words[i].0 == *first) {
+            let mut last = start;
+            for want in &wanted[1..] {
+                let next = words[last + 1..]
+                    .iter()
+                    .take(MAX_SKIP + 1)
+                    .position(|(w, _)| w == want);
+                match next {
+                    Some(n) => last += n + 1,
+                    None => continue 'starts,
+                }
+            }
+            out.push(words[start].1.start..words[last].1.end);
+        }
+        out
     }
 }
 
@@ -276,10 +350,85 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_punctuation_change_counts_for_any_quote() {
+    fn a_bare_punctuation_change_counts_for_a_quote_spanning_it() {
         let c = Changes::between(Some("fast and cheap\n"), "fast - and cheap\n");
         assert_eq!(lines(&c), vec![1]);
-        assert!(c.quote_overlaps(1..=1, "and cheap"));
+        assert!(c.quote_overlaps(1..=1, "fast - and"));
+        assert!(!c.quote_overlaps(1..=1, "and cheap"));
+    }
+
+    // One-line paragraphs: the change has to be inside the quote, not just on its line.
+    const PARAGRAPH: &str = "The cache stays warm all day. Then a cold start costs a second.\n";
+
+    #[test]
+    fn a_common_word_elsewhere_on_the_line_doesnt_count() {
+        let after = "The cache stays warm all day. Then the cold start costs a second.\n";
+        let c = Changes::between(Some(PARAGRAPH), after);
+        assert!(!c.quote_overlaps(1..=1, "The cache stays warm all day."));
+        assert!(c.quote_overlaps(1..=1, "Then the cold start costs a second."));
+    }
+
+    #[test]
+    fn a_deletion_elsewhere_on_the_line_doesnt_count() {
+        let after = "The cache stays warm all day. Then a start costs a second.\n";
+        let c = Changes::between(Some(PARAGRAPH), after);
+        assert!(!c.quote_overlaps(1..=1, "The cache stays warm all day."));
+    }
+
+    #[test]
+    fn a_deletion_inside_or_at_the_edge_of_the_quote_counts() {
+        let after = "The cache stays warm. Then a cold start costs a second.\n";
+        let c = Changes::between(Some(PARAGRAPH), after);
+        assert!(c.quote_overlaps(1..=1, "The cache stays warm."));
+        let c = Changes::between(Some("it really works\n"), "it works\n");
+        assert!(
+            c.quote_overlaps(1..=1, "works"),
+            "the gap touches the quote"
+        );
+    }
+
+    #[test]
+    fn link_targets_are_skipped_when_placing_a_quote() {
+        let before = "Read [the guide](docs/a.md) first. Then run a tool.\n";
+        let after = "Read [the guide](docs/a.md) first. Then run the tool.\n";
+        let c = Changes::between(Some(before), after);
+        assert!(!c.quote_overlaps(1..=1, "Read the guide first."));
+        let after = "Read [the new guide](docs/a.md) first. Then run a tool.\n";
+        let c = Changes::between(Some(before), after);
+        assert!(c.quote_overlaps(1..=1, "Read the new guide first."));
+    }
+
+    #[test]
+    fn every_place_a_repeated_quote_fits_is_tried() {
+        let before = "the cache warms. the cache cools.\n";
+        let c = Changes::between(Some(before), "the cache warms. the Cache cools.\n");
+        assert!(c.quote_overlaps(1..=1, "the cache"));
+    }
+
+    #[test]
+    fn a_quote_can_run_across_lines() {
+        let before = "First line here\nsecond line old.\n";
+        let c = Changes::between(Some(before), "First line here\nsecond line new.\n");
+        assert!(c.quote_overlaps(1..=2, "here second line new."));
+        assert!(!c.quote_overlaps(1..=2, "First line here second"));
+    }
+
+    #[test]
+    fn a_quote_that_wont_place_falls_back_to_shared_words() {
+        let before = "caf&eacute; menu old\n";
+        let c = Changes::between(Some(before), "caf&eacute; menu new\n");
+        assert!(c.quote_overlaps(1..=1, "café menu new"));
+        assert!(!c.quote_overlaps(1..=1, "café menu"));
+        assert!(
+            !c.quote_overlaps(1..=1, "..."),
+            "no words to place or share"
+        );
+        let skipped = format!("start {} end\n", "x ".repeat(MAX_SKIP + 1));
+        let c = Changes::between(Some(&skipped.replace("end", "fin")), &skipped);
+        assert!(
+            c.quote_overlaps(1..=1, "start end"),
+            "too far apart to place"
+        );
     }
 
     #[test]
